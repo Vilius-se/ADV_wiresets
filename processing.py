@@ -1903,6 +1903,83 @@ def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
                     df.at[idx13, "Name.1"] = full13
 
     return df.reset_index(drop=True)
+    
+def stage1_pipeline_27(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pipeline 27:
+    Ieško RD (H stulpelis Line-Function) grupių pagal tą patį Wireno, kur:
+      - RD eilučių skaičius toje Wireno grupėje >= 2
+      - tarp RD eilučių yra bent vienas -S* pajungimo taškas
+      - ir bent vienas -Q* pajungimo taškas
+
+    Tada orientuoja RD grandinę taip, kad:
+      - eilutėse su -S*:     -S* būtų kairėje (Name)
+      - eilutėse su -Q*:     -Q* būtų dešinėje (Name.1)
+
+    Jei jau tvarkinga – nieko nekeičia (idempotentiška).
+    """
+
+    import re
+    from collections import defaultdict
+
+    df = df.copy()
+    needed = {"Name", "Name.1", "Wireno", "Line-Function"}
+    if not needed.issubset(df.columns):
+        return df.reset_index(drop=True)
+
+    # normalizuojam RD
+    lf_norm = df["Line-Function"].astype(str).str.strip().str.upper()
+
+    def base(sym):
+        sym = str(sym).strip()
+        if ":" in sym:
+            return sym.rsplit(":", 1)[0]
+        return sym
+
+    for w, g in df.groupby(df["Wireno"].astype(str)):
+        g_idx = g.index
+        g_rd_idx = g_idx[lf_norm.loc[g_idx] == "RD"]
+
+        # reikia bent 2 RD laidų su tuo pačiu Wireno
+        if len(g_rd_idx) < 2:
+            continue
+
+        # surenkam bazes iš RD subset
+        bases = set()
+        for idx in g_rd_idx:
+            bases.add(base(df.at[idx, "Name"]))
+            bases.add(base(df.at[idx, "Name.1"]))
+        bases = {b for b in bases if b and b.lower() != "nan"}
+
+        has_S = any(b.startswith("-S") for b in bases)
+        has_Q = any(b.startswith("-Q") for b in bases)
+        if not (has_S and has_Q):
+            continue
+
+        # orientuojam kiekvieną RD eilutę
+        for idx in g_rd_idx:
+            left  = str(df.at[idx, "Name"]).strip()
+            right = str(df.at[idx, "Name.1"]).strip()
+            lb = base(left)
+            rb = base(right)
+
+            left_is_S  = lb.startswith("-S")
+            right_is_S = rb.startswith("-S")
+            left_is_Q  = lb.startswith("-Q")
+            right_is_Q = rb.startswith("-Q")
+
+            # jei -S yra dešinėje -> swap
+            if right_is_S and not left_is_S:
+                df.at[idx, "Name"], df.at[idx, "Name.1"] = right, left
+                left, right = right, left
+                lb, rb = rb, lb
+                left_is_Q, right_is_Q = right_is_Q, left_is_Q
+
+            # jei -Q yra kairėje -> swap
+            if left_is_Q and not right_is_Q:
+                df.at[idx, "Name"], df.at[idx, "Name.1"] = right, left
+
+    return df.reset_index(drop=True)
 
 def stage2_pipeline_1(uploaded_file) -> pd.DataFrame:
     """
