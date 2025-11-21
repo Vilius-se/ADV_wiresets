@@ -1001,7 +1001,7 @@ def stage1_pipeline_17(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     new_symbols = {
         '-F903:2',   '-F903:N2',  '-F903.1:2', '-F903.1:N2', '-F904:2',  '-F904.1:N2',
-        '-T901',     '-C903:10',  '-C903:11',  '-F903.2:2',  '-F903.2:1', '-F901.1:1'
+        '-T901',     '-C903:10',  '-C903:11',  '-F903.2:2',  '-F903.2:1', '-F901.1:1',
         '-F901:2',   '-F901:N2',  '-F903:1',   '-F903.1:1',  '-F904:1',  '-F904.1:1',
         '-K918:11',  '-K918:14',  '-F902:2',   '-F902:N2',   '-G90A3:OUT+', '-G90A3:OUT-'
     }
@@ -1753,6 +1753,156 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
     else:
         return df.reset_index(drop=True)
 
+def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stage 1 Pipeline 26 (COMBINED FINAL PAIRS):
+
+    A) Wireno ...:01 grupėse sutvarko bazes su pin :3 ir :6:
+       - palieka :6 ↔ other
+       - padaro :3 ↔ :6
+       (struktūra kaip tavo nuotraukoje)
+
+    B) RD (Line-Function = raudona spalva) grupėse, toje pačioje Wireno grupėje,
+       sutvarko kontaktorius -Qxxxx su A1 ir 13:
+       - palieka A1 ↔ other
+       - padaro 13 ↔ A1
+
+    Abi taisyklės idempotentiškos:
+    jei jau tvarkinga – nieko nekeičia.
+    """
+
+    import re
+    from collections import defaultdict
+
+    df = df.copy()
+
+    # ============================================================
+    # A) :01 Wireno + (:3 / :6) logika
+    # ============================================================
+
+    if not {"Name", "Name.1", "Wireno"}.issubset(df.columns):
+        return df.reset_index(drop=True)
+
+    wirenos_01 = sorted(
+        w for w in df["Wireno"].astype(str).unique()
+        if w.endswith(":01")
+    )
+
+    for w in wirenos_01:
+        mask_w = df["Wireno"].astype(str) == w
+        group_idx = df.index[mask_w]
+        if len(group_idx) == 0:
+            continue
+
+        # base -> { '3': [(idx, side)], '6': [(idx, side)] }
+        base_to_pins = {}
+
+        for idx in group_idx:
+            for side in ["Name", "Name.1"]:
+                s = str(df.at[idx, side])
+                if ":" not in s:
+                    continue
+
+                base, pin = s.rsplit(":", 1)
+                if pin not in {"3", "6"}:
+                    continue
+
+                base_to_pins.setdefault(base, {"3": [], "6": []})
+                base_to_pins[base][pin].append((idx, side))
+
+        for base, pins in base_to_pins.items():
+            if not pins["3"] or not pins["6"]:
+                continue
+
+            full3 = f"{base}:3"
+            full6 = f"{base}:6"
+
+            # ar jau yra :3 ↔ :6 eilutė?
+            has_bridge = False
+            for idx in group_idx:
+                pair = {str(df.at[idx, "Name"]), str(df.at[idx, "Name.1"])}
+                if pair == {full3, full6}:
+                    has_bridge = True
+                    break
+            if has_bridge:
+                continue
+
+            idx3, side3 = pins["3"][0]
+            idx6, side6 = pins["6"][0]
+
+            other6 = df.at[idx6, "Name.1"] if side6 == "Name" else df.at[idx6, "Name"]
+            other3 = df.at[idx3, "Name.1"] if side3 == "Name" else df.at[idx3, "Name"]
+
+            # tvarkom tik jei abu jungiasi į tą patį OTHER
+            if str(other6) != str(other3):
+                continue
+
+            # 1) paliekam :6 ↔ other (idx6)
+            df.at[idx6, "Name"] = full6
+            df.at[idx6, "Name.1"] = other6
+
+            # 2) perrašom :3 ↔ :6 (idx3)
+            df.at[idx3, "Name"] = full3
+            df.at[idx3, "Name.1"] = full6
+
+
+    # ============================================================
+    # B) RD + Q:A1 / Q:13 logika (tik toje pačioje Wireno grupėje)
+    # ============================================================
+
+    if "Line-Function" in df.columns:
+        lf_norm = df["Line-Function"].astype(str).str.strip().str.upper()
+        q_pat = re.compile(r"(-Q\d+)\s*:\s*(A1|13)$")
+
+        for w in df["Wireno"].dropna().astype(str).unique():
+            mask_rd_group = (df["Wireno"].astype(str) == w) & (lf_norm == "RD")
+            sub_idx = df.index[mask_rd_group]
+            if len(sub_idx) == 0:
+                continue
+
+            q_map = defaultdict(dict)  # base -> {"A1":(idx,side), "13":(idx,side)}
+
+            for idx in sub_idx:
+                for side in ["Name", "Name.1"]:
+                    s = str(df.at[idx, side]).strip()
+                    m = q_pat.match(s)
+                    if not m:
+                        continue
+                    base, pin = m.group(1).upper(), m.group(2).upper()
+                    if pin not in q_map[base]:
+                        q_map[base][pin] = (idx, side)
+
+            for base, pins in q_map.items():
+                if "A1" not in pins or "13" not in pins:
+                    continue
+
+                fullA1 = f"{base}:A1"
+                full13 = f"{base}:13"
+
+                # ar jau yra A1 ↔ 13 jungtis su tuo pačiu Wireno?
+                mask_bridge = (
+                    (df["Wireno"].astype(str) == w) &
+                    (
+                        (df["Name"].astype(str).str.strip().eq(fullA1) &
+                         df["Name.1"].astype(str).str.strip().eq(full13)) |
+                        (df["Name"].astype(str).str.strip().eq(full13) &
+                         df["Name.1"].astype(str).str.strip().eq(fullA1))
+                    )
+                )
+                if mask_bridge.any():
+                    continue
+
+                idx13, side13 = pins["13"]
+
+                # paliekam A1 ↔ other, o 13 perrašom į 13 ↔ A1
+                if side13 == "Name":
+                    df.at[idx13, "Name"] = full13
+                    df.at[idx13, "Name.1"] = fullA1
+                else:
+                    df.at[idx13, "Name"] = fullA1
+                    df.at[idx13, "Name.1"] = full13
+
+    return df.reset_index(drop=True)
 
 def stage2_pipeline_1(uploaded_file) -> pd.DataFrame:
     """
