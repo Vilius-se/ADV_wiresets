@@ -1755,154 +1755,265 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
 
 def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Stage 1 Pipeline 26 (COMBINED FINAL PAIRS):
+    Stage 1 Pipeline 26 (FULL)
 
-    A) Wireno ...:01 grupėse sutvarko bazes su pin :3 ir :6:
-       - palieka :6 ↔ other
-       - padaro :3 ↔ :6
-       (struktūra kaip tavo nuotraukoje)
+    A) :3 / :6 grandinėlės tvarkymas (kaip tavo pavyzdyje)
+       - Dirba grupėse su tuo pačiu Wireno, kurių Wireno baigiasi ':01'
+       - Ieško komponento bazės (pvz. -X128), kuri turi ir :3, ir :6 tame pačiame Wireno
+       - Tvarko tik tada, kai randama aiški struktūra:
+            vienas laidas su bazė:3
+            vienas laidas su bazė:6
+         ir vienas iš jų jungiasi į kitą tos pačios bazės piną.
+       - Rezultatas:
+            1 eilutė: bazė:3 ↔ bazė:6
+            2 eilutė: bazė:6 ↔ kitas taškas
 
-    B) RD (Line-Function = raudona spalva) grupėse, toje pačioje Wireno grupėje,
-       sutvarko kontaktorius -Qxxxx su A1 ir 13:
-       - palieka A1 ↔ other
-       - padaro 13 ↔ A1
-
-    Abi taisyklės idempotentiškos:
-    jei jau tvarkinga – nieko nekeičia.
+    B) Q:A1 / Q:13 RD grandinių "sutvarkymas"
+       - Tik RD eilutėse toje pačioje Wireno grupėje
+       - Jei randa tą patį Q su A1 ir 13:
+            suformuoja 3 eilučių stuburą:
+               1) Q:13 ↔ Q:A1
+               2) Q:A1 ↔ otherA1
+               3) otherA1 ↔ other13  (jei other13 != otherA1)
+         ir pašalina perteklines senas Q:A1/Q:13 eilutes tame Wireno.
     """
-
     import re
     from collections import defaultdict
 
     df = df.copy()
-
-    # ============================================================
-    # A) :01 Wireno + (:3 / :6) logika
-    # ============================================================
-
-    if not {"Name", "Name.1", "Wireno"}.issubset(df.columns):
+    needed = {"Name", "Name.1", "Wireno"}
+    if not needed.issubset(df.columns):
         return df.reset_index(drop=True)
 
-    wirenos_01 = sorted(
-        w for w in df["Wireno"].astype(str).unique()
-        if w.endswith(":01")
-    )
+    # -------------------------
+    # helperiai
+    # -------------------------
+    def s(x):  # safe str
+        return "" if pd.isna(x) else str(x).strip()
 
-    for w in wirenos_01:
-        mask_w = df["Wireno"].astype(str) == w
-        group_idx = df.index[mask_w]
-        if len(group_idx) == 0:
+    def base(sym: str) -> str:
+        sym = s(sym)
+        return sym.rsplit(":", 1)[0] if ":" in sym else sym
+
+    def pin(sym: str) -> str:
+        sym = s(sym)
+        return sym.rsplit(":", 1)[1] if ":" in sym else ""
+
+    def is_rd_row(idx) -> bool:
+        if "Line-Function" not in df.columns:
+            return True
+        return s(df.at[idx, "Line-Function"]).upper() == "RD"
+
+    # ============================================================
+    # A) :3 / :6 taisymas (konservatyvus)
+    # ============================================================
+    wir_series = df["Wireno"].astype(str).fillna("")
+
+    for w, g in df.groupby(wir_series, sort=False):
+        if not re.search(r":01\s*$", w):
             continue
 
-        # base -> { '3': [(idx, side)], '6': [(idx, side)] }
-        base_to_pins = {}
+        g_idx = list(g.index)
 
-        for idx in group_idx:
-            for side in ["Name", "Name.1"]:
-                s = str(df.at[idx, side])
-                if ":" not in s:
-                    continue
+        # rinkti bazes su :3 ir :6
+        base_to_rows3 = defaultdict(list)
+        base_to_rows6 = defaultdict(list)
 
-                base, pin = s.rsplit(":", 1)
-                if pin not in {"3", "6"}:
-                    continue
+        for idx in g_idx:
+            n, n1 = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+            for side_val in (n, n1):
+                b = base(side_val)
+                p = ":" + pin(side_val) if ":" in side_val else ""
+                if p == ":3":
+                    base_to_rows3[b].append(idx)
+                if p == ":6":
+                    base_to_rows6[b].append(idx)
 
-                base_to_pins.setdefault(base, {"3": [], "6": []})
-                base_to_pins[base][pin].append((idx, side))
+        common_bases = set(base_to_rows3).intersection(base_to_rows6)
 
-        for base, pins in base_to_pins.items():
-            if not pins["3"] or not pins["6"]:
+        for b in common_bases:
+            # imam po vieną aiškiausią eilutę su :3 ir :6
+            r3_list = base_to_rows3[b]
+            r6_list = base_to_rows6[b]
+            if not r3_list or not r6_list:
                 continue
 
-            full3 = f"{base}:3"
-            full6 = f"{base}:6"
+            idx3 = r3_list[0]
+            idx6 = r6_list[0]
 
-            # ar jau yra :3 ↔ :6 eilutė?
-            has_bridge = False
-            for idx in group_idx:
-                pair = {str(df.at[idx, "Name"]), str(df.at[idx, "Name.1"])}
-                if pair == {full3, full6}:
-                    has_bridge = True
-                    break
-            if has_bridge:
+            # nustatom realias poras
+            n3_l, n3_r = s(df.at[idx3, "Name"]), s(df.at[idx3, "Name.1"])
+            n6_l, n6_r = s(df.at[idx6, "Name"]), s(df.at[idx6, "Name.1"])
+
+            b3 = f"{b}:3"
+            b6 = f"{b}:6"
+
+            # ar viena iš eilučių jungia b:3 su b:6 ?
+            def row_has_pair(idx, a, c):
+                left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+                return {left, right} == {a, c}
+
+            has_36_in_3 = row_has_pair(idx3, b3, b6)
+            has_36_in_6 = row_has_pair(idx6, b3, b6)
+
+            # jei nei viena neturi aiškiai b3-b6 poros -> neliečiam
+            if not (has_36_in_3 or has_36_in_6):
                 continue
 
-            idx3, side3 = pins["3"][0]
-            idx6, side6 = pins["6"][0]
+            # surandam "kitą tašką" prie b:6 (ne b:3)
+            def other_of_b6(idx):
+                left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+                if left == b6 and right != b3:
+                    return right
+                if right == b6 and left != b3:
+                    return left
+                return None
 
-            other6 = df.at[idx6, "Name.1"] if side6 == "Name" else df.at[idx6, "Name"]
-            other3 = df.at[idx3, "Name.1"] if side3 == "Name" else df.at[idx3, "Name"]
-
-            # tvarkom tik jei abu jungiasi į tą patį OTHER
-            if str(other6) != str(other3):
+            other = other_of_b6(idx3) or other_of_b6(idx6)
+            if other is None or other == b3:
                 continue
 
-            # 1) paliekam :6 ↔ other (idx6)
-            df.at[idx6, "Name"] = full6
-            df.at[idx6, "Name.1"] = other6
+            # dabar perrašom į norimą formą:
+            # 1) b3 ↔ b6
+            # 2) b6 ↔ other
+            # naudokim idx3 kaip b3-b6, idx6 kaip b6-other
+            df.at[idx3, "Name"]   = b3
+            df.at[idx3, "Name.1"] = b6
 
-            # 2) perrašom :3 ↔ :6 (idx3)
-            df.at[idx3, "Name"] = full3
-            df.at[idx3, "Name.1"] = full6
-
+            df.at[idx6, "Name"]   = b6
+            df.at[idx6, "Name.1"] = other
 
     # ============================================================
-    # B) RD + Q:A1 / Q:13 logika (tik toje pačioje Wireno grupėje)
+    # B) Q:A1 / Q:13 stuburo formavimas
     # ============================================================
-
     if "Line-Function" in df.columns:
         lf_norm = df["Line-Function"].astype(str).str.strip().str.upper()
-        q_pat = re.compile(r"(-Q\d+)\s*:\s*(A1|13)$")
+    else:
+        lf_norm = pd.Series(["RD"] * len(df), index=df.index)
 
-        for w in df["Wireno"].dropna().astype(str).unique():
-            mask_rd_group = (df["Wireno"].astype(str) == w) & (lf_norm == "RD")
-            sub_idx = df.index[mask_rd_group]
-            if len(sub_idx) == 0:
+    q_pat = re.compile(r"(-Q\d+)\s*:\s*(A1|13)$", re.IGNORECASE)
+
+    out_parts = []
+    for w, g_all in df.groupby(df["Wireno"].astype(str), sort=False):
+        g = g_all.copy()
+        g_rd = g[g_all.index.map(lambda i: lf_norm.at[i] == "RD")]
+
+        if len(g_rd) < 2:
+            out_parts.append(g_all)
+            continue
+
+        # surenkam Q bazes su A1/13
+        q_map = defaultdict(lambda: {"A1": [], "13": []})
+
+        for idx, row in g_rd.iterrows():
+            left, right = s(row["Name"]), s(row["Name.1"])
+
+            for val, other in [(left, right), (right, left)]:
+                m = q_pat.match(val)
+                if not m:
+                    continue
+                qbase, p = m.group(1).upper(), m.group(2).upper()
+                q_map[qbase][p].append((idx, val, other))
+
+        # tvarkom kiekvieną Q bazę
+        for qbase, pins in q_map.items():
+            if not pins["A1"] or not pins["13"]:
                 continue
 
-            q_map = defaultdict(dict)  # base -> {"A1":(idx,side), "13":(idx,side)}
+            fullA1 = f"{qbase}:A1"
+            full13 = f"{qbase}:13"
 
-            for idx in sub_idx:
-                for side in ["Name", "Name.1"]:
-                    s = str(df.at[idx, side]).strip()
-                    m = q_pat.match(s)
-                    if not m:
-                        continue
-                    base, pin = m.group(1).upper(), m.group(2).upper()
-                    if pin not in q_map[base]:
-                        q_map[base][pin] = (idx, side)
+            # A1 "other" (pirmas rastas)
+            idxA1, _, otherA1 = pins["A1"][0]
 
-            for base, pins in q_map.items():
-                if "A1" not in pins or "13" not in pins:
+            # 13 "other" kandidatai, kurie nelygūs otherA1
+            other13_candidates = []
+            idx13_candidates = []
+            for idx13, _, oth in pins["13"]:
+                if s(oth) != s(otherA1):
+                    other13_candidates.append(oth)
+                    idx13_candidates.append(idx13)
+
+            # jei visi 13 kand. == otherA1, stuburas bus tik 2 eilučių
+            other13 = other13_candidates[0] if other13_candidates else otherA1
+
+            # surenkam visas RD eilutes, kur yra Q:A1 arba Q:13
+            involved_idx = set()
+            for idx, row in g_rd.iterrows():
+                pair = {s(row["Name"]), s(row["Name.1"])}
+                if fullA1 in pair or full13 in pair:
+                    involved_idx.add(idx)
+            involved_idx = list(involved_idx)
+            if len(involved_idx) < 2:
+                continue
+
+            # parenkam 3 eiles stuburui iš esamų involved
+            # 1) bridge eilė – jei yra jau full13/fullA1 kartu, imame ją,
+            #    jei nėra – imame pirmą 13 eilę
+            bridge_idx = None
+            for idx in involved_idx:
+                pair = {s(g.at[idx, "Name"]), s(g.at[idx, "Name.1"])}
+                if pair == {full13, fullA1}:
+                    bridge_idx = idx
+                    break
+            if bridge_idx is None:
+                bridge_idx = pins["13"][0][0]
+
+            # 2) A1-otherA1 eilė – imam idxA1 (jei ne bridge), kitaip kitą A1 eilę
+            a1_idx = idxA1
+            if a1_idx == bridge_idx and len(pins["A1"]) > 1:
+                a1_idx = pins["A1"][1][0]
+
+            # 3) otherA1-other13 eilė – jei reikia,
+            #    imam likusią involved eilę, kuri nėra bridge ir nėra a1_idx
+            tail_idx = None
+            if s(other13) != s(otherA1):
+                for idx in involved_idx:
+                    if idx not in (bridge_idx, a1_idx):
+                        tail_idx = idx
+                        break
+
+            # perrašom stuburą
+            # bridge
+            g.at[bridge_idx, "Name"] = full13
+            g.at[bridge_idx, "Name.1"] = fullA1
+
+            # A1 → otherA1
+            g.at[a1_idx, "Name"] = fullA1
+            g.at[a1_idx, "Name.1"] = otherA1
+
+            # tail (jei reikalinga)
+            if tail_idx is not None:
+                g.at[tail_idx, "Name"] = otherA1
+                g.at[tail_idx, "Name.1"] = other13
+
+            # pašalinam visas kitas RD eilutes su Q:A1/Q:13 šiame Wireno,
+            # kurios nepateko į stuburą
+            keep_idx = {bridge_idx, a1_idx}
+            if tail_idx is not None:
+                keep_idx.add(tail_idx)
+
+            drop_idx = []
+            for idx in g_rd.index:
+                if idx in keep_idx:
                     continue
+                pair = {s(g.at[idx, "Name"]), s(g.at[idx, "Name.1"])}
+                if fullA1 in pair or full13 in pair:
+                    drop_idx.append(idx)
 
-                fullA1 = f"{base}:A1"
-                full13 = f"{base}:13"
+            if drop_idx:
+                g = g.drop(index=drop_idx)
 
-                # ar jau yra A1 ↔ 13 jungtis su tuo pačiu Wireno?
-                mask_bridge = (
-                    (df["Wireno"].astype(str) == w) &
-                    (
-                        (df["Name"].astype(str).str.strip().eq(fullA1) &
-                         df["Name.1"].astype(str).str.strip().eq(full13)) |
-                        (df["Name"].astype(str).str.strip().eq(full13) &
-                         df["Name.1"].astype(str).str.strip().eq(fullA1))
-                    )
-                )
-                if mask_bridge.any():
-                    continue
+        out_parts.append(g)
 
-                idx13, side13 = pins["13"]
+    df = pd.concat(out_parts, ignore_index=True)
 
-                # paliekam A1 ↔ other, o 13 perrašom į 13 ↔ A1
-                if side13 == "Name":
-                    df.at[idx13, "Name"] = full13
-                    df.at[idx13, "Name.1"] = fullA1
-                else:
-                    df.at[idx13, "Name"] = fullA1
-                    df.at[idx13, "Name.1"] = full13
+    # galutinis dedup (jei reikia)
+    if {"Name", "Name.1"}.issubset(df.columns):
+        df = df.drop_duplicates(subset=["Name", "Name.1", "Wireno"], keep="first")
 
     return df.reset_index(drop=True)
+
     
 def stage1_pipeline_27(df: pd.DataFrame) -> pd.DataFrame:
     """
