@@ -1861,6 +1861,153 @@ def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
 
     return df.reset_index(drop=True)
 
+def stage1_pipeline_27(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pipeline 27 – Q:13 / Q:A1 RD „stuburo“ formavimas.
+
+    Ieško RD (Line-Function = 'RD') eilučių grupėse pagal tą patį Wireno, kur:
+      – yra bent du laidai
+      – bent vienas kontaktas -Qxx:13
+      – bent vienas kontaktas -Qxx:A1 (tas pats Qxx)
+
+    Tada toje Wireno grupėje, kiekvienam tokiam -Qxx:
+      1) Formuoja stuburą Q:13 ↔ Q:A1
+      2) Q:A1 ↔ other  (kur other yra komponentas, bendras Q:13 ir Q:A1 kaimynas)
+      3) other ↔ other_tail (jei yra antras „other“ iš Q:13 pusės)
+
+    Jei grandinė jau tokios formos – nieko nekeičia (idempotentiška).
+    """
+
+    import re
+    from collections import defaultdict
+
+    df = df.copy()
+    needed = {"Name", "Name.1", "Wireno", "Line-Function"}
+    if not needed.issubset(df.columns):
+        return df.reset_index(drop=True)
+
+    # Normalizuojam RD žymėjimą
+    lf_norm = df["Line-Function"].astype(str).str.strip().str.upper()
+
+    # Regex, kad pagautume -Qxxxx:13 arba -Qxxxx:A1
+    q_pat = re.compile(r"^(-Q\d+)\s*:\s*(A1|13)$", re.IGNORECASE)
+
+    def s(val):
+        return "" if pd.isna(val) else str(val).strip()
+
+    for wir, grp in df.groupby(df["Wireno"].astype(str), sort=False):
+        grp_idx = list(grp.index)
+
+        # RD eilutės šitoje Wireno grupėje
+        rd_idx = [i for i in grp_idx if lf_norm.get(i, "") == "RD"]
+        if len(rd_idx) < 2:
+            continue
+
+        # Q bazės ir jų A1/13 laidai
+        # q_map[qbase]['A1'] / ['13'] -> list of (row_idx, this_symbol, other_symbol)
+        q_map = defaultdict(lambda: {"A1": [], "13": []})
+
+        for idx in rd_idx:
+            left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+
+            # kairė pusė
+            m = q_pat.match(left)
+            if m:
+                qbase = m.group(1).upper()
+                pin = m.group(2).upper()
+                q_map[qbase][pin].append((idx, left, right))
+
+            # dešinė pusė
+            m = q_pat.match(right)
+            if m:
+                qbase = m.group(1).upper()
+                pin = m.group(2).upper()
+                q_map[qbase][pin].append((idx, right, left))
+
+        # Apdirbam kiekvieną Q bazę, kuri turi ir A1, ir 13
+        for qbase, pins in q_map.items():
+            if not pins["A1"] or not pins["13"]:
+                continue
+
+            fullA1 = f"{qbase}:A1"
+            full13 = f"{qbase}:13"
+
+            # kaimynai iš 13 ir A1
+            neighbors_13 = {other for (_, _, other) in pins["13"]}
+            neighbors_A1 = {other for (_, _, other) in pins["A1"]}
+
+            # bendras kaimynas = „vidurinis other“
+            common_others = [o for o in neighbors_13 & neighbors_A1 if s(o)]
+            if not common_others:
+                # jeigu Q:13 ir Q:A1 neturi bendro kaimyno – šitos Q bazės neliest
+                continue
+
+            middle_other = s(common_others[0])
+
+            # „uodegos“ other – kitas kaimynas iš Q:13 pusės, jei toks yra
+            tail_candidates = [o for o in neighbors_13 if s(o) and s(o) != middle_other]
+            tail_other = s(tail_candidates[0]) if tail_candidates else None
+
+            # Pasirenkam eilutes, kurias perrašysim:
+            #  – idx_stub  : Q:13 ↔ Q:A1
+            #  – idx_middle: Q:A1 ↔ middle_other
+            #  – idx_tail  : middle_other ↔ tail_other (jei reikia)
+            idx_stub = pins["13"][0][0]
+            idx_middle = pins["A1"][0][0]
+
+            idx_tail = None
+            if tail_other is not None:
+                # ieškom Q:13–tail_other eilutės
+                for (idx, this_sym, other_sym) in pins["13"]:
+                    if s(other_sym) == tail_other and idx != idx_stub:
+                        idx_tail = idx
+                        break
+                # jei neradom tokios, pasinaudojam bet kuria kita RD eilute,
+                # kur dalyvauja middle_other / tail_other
+                if idx_tail is None:
+                    for idx in rd_idx:
+                        left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+                        pair = {left, right}
+                        if idx in (idx_stub, idx_middle):
+                            continue
+                        if middle_other in pair or (tail_other in pair):
+                            idx_tail = idx
+                            break
+
+            # 1) stuburas Q:13 ↔ Q:A1
+            df.at[idx_stub, "Name"] = full13
+            df.at[idx_stub, "Name.1"] = fullA1
+
+            # 2) Q:A1 ↔ middle_other
+            df.at[idx_middle, "Name"] = fullA1
+            df.at[idx_middle, "Name.1"] = middle_other
+
+            # 3) middle_other ↔ tail_other (jei turim uodegą)
+            if tail_other is not None and idx_tail is not None:
+                df.at[idx_tail, "Name"] = middle_other
+                df.at[idx_tail, "Name.1"] = tail_other
+
+            # Išvalom perteklines RD eilutes su šitu Q (paliekam tik stuburą/middle/tail)
+            keep_idx = {idx_stub, idx_middle}
+            if idx_tail is not None:
+                keep_idx.add(idx_tail)
+
+            drop_idx = []
+            for idx in rd_idx:
+                if idx in keep_idx:
+                    continue
+                left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+                if fullA1 in {left, right} or full13 in {left, right}:
+                    drop_idx.append(idx)
+
+            if drop_idx:
+                df = df.drop(index=drop_idx)
+
+    # galutinis indeksų sutvarkymas ir minimalus dedupe
+    if {"Name", "Name.1", "Wireno"}.issubset(df.columns):
+        df = df.drop_duplicates(subset=["Name", "Name.1", "Wireno"], keep="first")
+
+    return df.reset_index(drop=True)
 
 def stage1_pipeline_28(df: pd.DataFrame) -> pd.DataFrame:
     """
