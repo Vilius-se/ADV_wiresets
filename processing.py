@@ -2086,6 +2086,7 @@ def stage1_pipeline_28(df: pd.DataFrame) -> pd.DataFrame:
 
     return df.reset_index(drop=True)
 
+
 def stage2_pipeline_1(uploaded_file) -> pd.DataFrame:
     """
     Stage-2 Pipeline 1 (KOMAX CSV) with conditional space removal:
