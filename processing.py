@@ -1755,248 +1755,116 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
 
 def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Stage 1 Pipeline 26 (FULL, patched)
+    Stage 1 Pipeline 26 – sutvarko :01 grandines su :3 ir :6 kontaktais.
 
-    A) :3 / :6 grandinėlės tvarkymas (kaip tavo pavyzdyje)
-       - Dirba tik grupėse su tuo pačiu Wireno, kurių Wireno baigiasi ':01'
-       - Ieško bazės (pvz. -X128), kuri turi ir :3, ir :6 tame pačiame Wireno
-       - Suranda realų bridge b:3 ↔ b:6 (bet kurioje eilutėje)
-       - Suranda kitą tašką prijungtą prie b:6 (ne b:3)
-       - Rezultatas:
-            1 eilutė: b:3 ↔ b:6
-            2 eilutė: b:6 ↔ other
+    Tikslas:
+      Toje pačioje Wireno (baigiasi ':01') grupėje, jei yra ta pati bazė
+      su kontaktais :3 ir :6, ir abu jie eina į tą patį "other":
 
-    B) Q:A1 / Q:13 RD grandinių stuburas
-       - TIK RD eilutėse toje pačioje Wireno grupėje
-       - Jei randamas tas pats Q su A1 ir 13:
-            1) Q:13 ↔ Q:A1
-            2) Q:A1 ↔ otherA1
-            3) otherA1 ↔ other13 (jei other13 != otherA1)
-         ir pašalina perteklines RD Q:A1/Q:13 eilutes tame Wireno.
+        bazė:3  ↔ other
+        bazė:6  ↔ other
+
+      → perstatome į:
+
+        bazė:6  ↔ other
+        bazė:3  ↔ bazė:6
+
+    Tai duoda struktūrą kaip tavo nuotraukoje:
+      viena eilutė :3–:6, kita :6–likęs pajungimas.
     """
-    import re
-    from collections import defaultdict
 
     df = df.copy()
-    needed = {"Name", "Name.1", "Wireno"}
-    if not needed.issubset(df.columns):
+
+    # Reikalingi stulpeliai
+    required = {"Name", "Name.1", "Wireno"}
+    if not required.issubset(df.columns):
         return df.reset_index(drop=True)
 
-    # ---------- helpers ----------
-    def s(x):
-        return "" if pd.isna(x) else str(x).strip()
+    # Einam per visus Wireno, kurie baigiasi ':01'
+    wirenos_01 = sorted(
+        w for w in df["Wireno"].astype(str).unique()
+        if w.endswith(":01")
+    )
 
-    def base(sym: str) -> str:
-        sym = s(sym)
-        return sym.rsplit(":", 1)[0] if ":" in sym else sym
-
-    def pin(sym: str) -> str:
-        sym = s(sym)
-        return sym.rsplit(":", 1)[1] if ":" in sym else ""
-
-    def pair(idx):
-        return {s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])}
-
-    def is_rd_idx(idx):
-        if "Line-Function" not in df.columns:
-            return True
-        return s(df.at[idx, "Line-Function"]).upper() == "RD"
-
-    # ============================================================
-    # A) :3 / :6 chain fix (robust)
-    # ============================================================
-    wir_series = df["Wireno"].astype(str).fillna("")
-
-    for w, g in df.groupby(wir_series, sort=False):
-        if not re.search(r":01\s*$", w):
+    for w in wirenos_01:
+        mask_w = df["Wireno"].astype(str) == w
+        group_idx = df.index[mask_w]
+        if len(group_idx) == 0:
             continue
 
-        g_idx = list(g.index)
+        # Susirenkam visus simbolius šitoje Wireno grupėje
+        symbols = set()
+        sub = df.loc[group_idx]
+        for col in ["Name", "Name.1"]:
+            symbols.update(sub[col].astype(str).tolist())
 
-        # collect all bases that have :3 or :6 pins
-        bases3 = defaultdict(list)
-        bases6 = defaultdict(list)
+        # base -> { '3': [(idx, side)], '6': [(idx, side)] }
+        base_to_pins = {}
 
-        for idx in g_idx:
-            n, n1 = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
-            for val in (n, n1):
-                b = base(val)
-                p = pin(val)
-                if p == "3":
-                    bases3[b].append(idx)
-                elif p == "6":
-                    bases6[b].append(idx)
-
-        common_bases = set(bases3) & set(bases6)
-        if not common_bases:
-            continue
-
-        for b in common_bases:
-            b3 = f"{b}:3"
-            b6 = f"{b}:6"
-
-            # 1) find bridge rows where {b3, b6}
-            bridge_rows = [idx for idx in g_idx if pair(idx) == {b3, b6}]
-            if not bridge_rows:
-                # if no explicit bridge, don't touch (conservative)
-                continue
-            bridge_idx = bridge_rows[0]
-
-            # 2) find any row that touches b6 but NOT b3 => other endpoint
-            other = None
-            other_idx = None
-            for idx in g_idx:
-                if idx == bridge_idx:
+        for idx in group_idx:
+            for side in ["Name", "Name.1"]:
+                s = str(df.at[idx, side])
+                if ":" not in s:
                     continue
-                pset = pair(idx)
-                if b6 in pset and b3 not in pset:
-                    # other endpoint is the symbol that's not b6
-                    left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
-                    other = right if left == b6 else left
-                    other_idx = idx
-                    break
-
-            if other is None:
-                continue  # nothing clear to chain
-
-            # 3) rewrite into required form
-            df.at[bridge_idx, "Name"] = b3
-            df.at[bridge_idx, "Name.1"] = b6
-
-            df.at[other_idx, "Name"] = b6
-            df.at[other_idx, "Name.1"] = other
-
-            # optional: if there are MORE b3/b6 rows in this group,
-            # do not delete them here (leave for later dedup).
-
-    # ============================================================
-    # B) Q:A1 / Q:13 RD backbone fix
-    # ============================================================
-    lf_norm = (df["Line-Function"].astype(str).str.strip().str.upper()
-               if "Line-Function" in df.columns
-               else pd.Series(["RD"] * len(df), index=df.index))
-
-    q_pat = re.compile(r"^(-Q\d+)\s*:\s*(A1|13)$", re.IGNORECASE)
-
-    out_parts = []
-    for w, g_all in df.groupby(df["Wireno"].astype(str), sort=False):
-        g = g_all.copy()
-        g_rd = g[g_all.index.map(lambda i: lf_norm.at[i] == "RD")]
-
-        if len(g_rd) < 2:
-            out_parts.append(g_all)
-            continue
-
-        # gather Q bases with A1/13 pins
-        q_map = defaultdict(lambda: {"A1": [], "13": []})
-
-        for idx, row in g_rd.iterrows():
-            left, right = s(row["Name"]), s(row["Name.1"])
-            for val, oth in ((left, right), (right, left)):
-                m = q_pat.match(val)
-                if not m:
+                base, pin = s.rsplit(":", 1)
+                if pin not in {"3", "6"}:
                     continue
-                qbase = m.group(1).upper()
-                p = m.group(2).upper()
-                q_map[qbase][p].append((idx, val, oth))
+                base_to_pins.setdefault(base, {"3": [], "6": []})
+                base_to_pins[base][pin].append((idx, side))
 
-        for qbase, pins in q_map.items():
-            if not pins["A1"] or not pins["13"]:
+        # Apdirbam bazes, kurios turi ir 3, ir 6
+        for base, pins in base_to_pins.items():
+            if not pins["3"] or not pins["6"]:
                 continue
 
-            fullA1 = f"{qbase}:A1"
-            full13 = f"{qbase}:13"
+            full3 = f"{base}:3"
+            full6 = f"{base}:6"
 
-            # pick A1 "other"
-            idxA1, _, otherA1 = pins["A1"][0]
-
-            # pick 13 "other" different from otherA1 if possible
-            other13 = None
-            idx13_pick = None
-            for idx13, _, oth in pins["13"]:
-                if s(oth) != s(otherA1):
-                    other13 = oth
-                    idx13_pick = idx13
+            # Jei jau yra eilutė bazė:3 ↔ bazė:6 – nieko nedarom
+            has_3_6 = False
+            for idx in group_idx:
+                left = str(df.at[idx, "Name"])
+                right = str(df.at[idx, "Name.1"])
+                if {left, right} == {full3, full6}:
+                    has_3_6 = True
                     break
-            if other13 is None:
-                other13 = otherA1
-                idx13_pick = pins["13"][0][0]
-
-            # all RD rows in this wireno involving this Q
-            involved_idx = []
-            for idx, row in g_rd.iterrows():
-                pset = {s(row["Name"]), s(row["Name.1"])}
-                if fullA1 in pset or full13 in pset:
-                    involved_idx.append(idx)
-            if len(involved_idx) < 2:
+            if has_3_6:
                 continue
 
-            # choose bridge row: prefer existing (Q13,Q A1) pair else first 13 row
-            bridge_idx = None
-            for idx in involved_idx:
-                if {s(g.at[idx, "Name"]), s(g.at[idx, "Name.1"])} == {full13, fullA1}:
-                    bridge_idx = idx
-                    break
-            if bridge_idx is None:
-                bridge_idx = idx13_pick
+            # Paimam po vieną kandidatą :3 ir :6
+            idx3, side3 = pins["3"][0]
+            idx6, side6 = pins["6"][0]
 
-            # choose A1 row: prefer idxA1 if not bridge, else another A1 row
-            a1_idx = idxA1
-            if a1_idx == bridge_idx:
-                if len(pins["A1"]) > 1:
-                    a1_idx = pins["A1"][1][0]
-                else:
-                    # if only one A1 row and it's bridge, reuse bridge for A1-other
-                    a1_idx = bridge_idx
+            # Koks yra "other" :6 eilutėje?
+            if side6 == "Name":
+                other = df.at[idx6, "Name.1"]
+            else:
+                other = df.at[idx6, "Name"]
 
-            # choose tail row if needed
-            tail_idx = None
-            if s(other13) != s(otherA1):
-                for idx in involved_idx:
-                    if idx not in (bridge_idx, a1_idx):
-                        tail_idx = idx
-                        break
+            # Koks "other" :3 eilutėje?
+            if side3 == "Name":
+                other3 = df.at[idx3, "Name.1"]
+            else:
+                other3 = df.at[idx3, "Name"]
 
-            # rewrite backbone
-            g.at[bridge_idx, "Name"] = full13
-            g.at[bridge_idx, "Name.1"] = fullA1
+            # Tvarkom tik tada, kai abu ėjo į tą patį "other"
+            if str(other3) != str(other):
+                continue
 
-            g.at[a1_idx, "Name"] = fullA1
-            g.at[a1_idx, "Name.1"] = otherA1
+            # 1) idx6 eilutę padarom: bazė:6 ↔ other
+            df.at[idx6, "Name"] = full6
+            df.at[idx6, "Name.1"] = other
 
-            if tail_idx is not None:
-                g.at[tail_idx, "Name"] = otherA1
-                g.at[tail_idx, "Name.1"] = other13
-
-            # drop extra RD rows with this Q in this wireno
-            keep_idx = {bridge_idx, a1_idx}
-            if tail_idx is not None:
-                keep_idx.add(tail_idx)
-
-            drop_idx = []
-            for idx in g_rd.index:
-                if idx in keep_idx:
-                    continue
-                pset = {s(g.at[idx, "Name"]), s(g.at[idx, "Name.1"])}
-                if fullA1 in pset or full13 in pset:
-                    drop_idx.append(idx)
-
-            if drop_idx:
-                g = g.drop(index=drop_idx)
-
-        out_parts.append(g)
-
-    df = pd.concat(out_parts, ignore_index=True)
-
-    # final dedup
-    if {"Name", "Name.1", "Wireno"}.issubset(df.columns):
-        df = df.drop_duplicates(subset=["Name", "Name.1", "Wireno"], keep="first")
+            # 2) idx3 eilutę padarom: bazė:3 ↔ bazė:6
+            df.at[idx3, "Name"] = full3
+            df.at[idx3, "Name.1"] = full6
 
     return df.reset_index(drop=True)
 
-def stage1_pipeline_27(df: pd.DataFrame) -> pd.DataFrame:
+
+def stage1_pipeline_28(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Pipeline 27:
+    Pipeline 28:
     Ieško RD (H stulpelis Line-Function) grupių pagal tą patį Wireno, kur:
       - RD eilučių skaičius toje Wireno grupėje >= 2
       - tarp RD eilučių yra bent vienas -S* pajungimo taškas
