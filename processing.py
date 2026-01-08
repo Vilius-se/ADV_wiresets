@@ -2062,8 +2062,21 @@ def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFra
         g = component_to_group.get(b)
         if not g:
             return "OTHER"
+
         g = str(g).strip().upper()
-        return g if g in PRIORITY else "OTHER"
+
+        # normalizuojam grupes iš ADV_WS_functions
+        if g.startswith("SWING"):
+            g = "SWING"
+        elif g.startswith("DOOR"):
+            g = "DOOR"
+        elif g.startswith("POWER"):
+            g = "POWER"
+        else:
+            g = "OTHER"
+
+        return g        
+
 
     def is_simple_path(edges, nodes):
         """
