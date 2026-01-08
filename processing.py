@@ -2009,80 +2009,257 @@ def stage1_pipeline_27(df: pd.DataFrame) -> pd.DataFrame:
 
     return df.reset_index(drop=True)
 
-def stage1_pipeline_28(df: pd.DataFrame) -> pd.DataFrame:
+def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFrame:
     """
-    Pipeline 28:
-    Ieško RD (H stulpelis Line-Function) grupių pagal tą patį Wireno, kur:
-      - RD eilučių skaičius toje Wireno grupėje >= 2
-      - tarp RD eilučių yra bent vienas -S* pajungimo taškas
-      - ir bent vienas -Q* pajungimo taškas
-
-    Tada orientuoja RD grandinę taip, kad:
-      - eilutėse su -S*:     -S* būtų kairėje (Name)
-      - eilutėse su -Q*:     -Q* būtų dešinėje (Name.1)
-
-    Jei jau tvarkinga – nieko nekeičia (idempotentiška).
+    Pipeline 28 (UPDATED) – RD grandinės perstatymas (rewiring) pagal grupes.
+    Tikslas (viename Wireno, tik RD eilutėms, kai grafas yra paprastas kelias be šakų):
+      Perstatyti RD grandinės mazgus taip, kad kelias būtų:
+        DOOR → SWING → OTHER → POWER
+      Jei kurios nors grupės nėra – ji tiesiog praleidžiama.
+      Jei komponentui nerandam grupės antrame faile – laikom OTHER.
+    SVARBU:
+      - Keičiame TIK 'Name' ir 'Name.1' reikšmes (poras).
+      - Visi kiti stulpeliai (Wireno, Line-Function, Line-Name, DaisyNo, ir t.t.) lieka nepakeisti.
+      - Neliečiam grupių, kurios nėra paprastas kelias (šakos, keli atskiri gabalai, kilpos, neaišku).
+    Parametrai:
+      df: pagrindinis EPLAN importo DataFrame
+      component_to_group: dict, pvz. {"-S1315":"DOOR", "-K2114":"SWING", "-Q1317":"POWER", ...}
+    Pastaba:
+      component_to_group raktai turi būti komponento bazė (iki ':'),
+      o reikšmės: "DOOR","SWING","POWER", ... (case-insensitive).
     """
 
-    import re
-    from collections import defaultdict
+    import pandas as pd
+    from collections import defaultdict, deque
 
     df = df.copy()
     needed = {"Name", "Name.1", "Wireno", "Line-Function"}
     if not needed.issubset(df.columns):
         return df.reset_index(drop=True)
 
-    # normalizuojam RD
+    # Normalizuojam RD
     lf_norm = df["Line-Function"].astype(str).str.strip().str.upper()
 
-    def base(sym):
-        sym = str(sym).strip()
+    # Grupės prioritetai
+    PRIORITY = {"DOOR": 0, "SWING": 1, "OTHER": 2, "POWER": 3}
+
+    def s(x) -> str:
+        return "" if pd.isna(x) else str(x).strip()
+
+    def base(sym: str) -> str:
+        sym = s(sym)
         if ":" in sym:
-            return sym.rsplit(":", 1)[0]
+            return sym.rsplit(":", 1)[0].strip()
         return sym
 
-    for w, g in df.groupby(df["Wireno"].astype(str)):
-        g_idx = g.index
-        g_rd_idx = g_idx[lf_norm.loc[g_idx] == "RD"]
+    def group_of_node(node: str) -> str:
+        """
+        node yra pilnas taškas su kontaktu (pvz. -S2115:.1).
+        Grupę nustatom pagal bazę (pvz. -S2115).
+        Neradus – OTHER.
+        """
+        b = base(node)
+        g = component_to_group.get(b)
+        if not g:
+            return "OTHER"
+        g = str(g).strip().upper()
+        return g if g in PRIORITY else "OTHER"
 
-        # reikia bent 2 RD laidų su tuo pačiu Wireno
-        if len(g_rd_idx) < 2:
+    def is_simple_path(edges, nodes):
+        """
+        Patikrina:
+          - grafas vienas komponentas
+          - visi laipsniai <= 2
+          - yra tiksliai 0 arba 2 galai (deg==1)
+          - briaunų skaičius == mazgų skaičius - 1
+        """
+        if not nodes:
+            return False
+
+        adj = defaultdict(set)
+        deg = defaultdict(int)
+        for a, b in edges:
+            if a == b:
+                return False
+            adj[a].add(b)
+            adj[b].add(a)
+            deg[a] += 1
+            deg[b] += 1
+            if deg[a] > 2 or deg[b] > 2:
+                return False
+
+        # connectivity
+        start = next(iter(nodes))
+        seen = set()
+        q = deque([start])
+        while q:
+            u = q.popleft()
+            if u in seen:
+                continue
+            seen.add(u)
+            for v in adj[u]:
+                if v not in seen:
+                    q.append(v)
+
+        if seen != set(nodes):
+            return False
+
+        # ends
+        ends = [n for n in nodes if deg.get(n, 0) == 1]
+        if len(nodes) == 1:
+            return False
+        if len(ends) not in (0, 2):
+            return False
+
+        # edges count check for simple path (no cycles)
+        # If ends==0 -> cycle, skip (we don't want loops)
+        if len(ends) == 0:
+            return False
+
+        if len(edges) != len(nodes) - 1:
+            return False
+
+        return True
+
+    def extract_path_order(edges, nodes):
+        """
+        Kai grafas yra paprastas kelias, grąžina mazgų eilę nuo vieno galo iki kito.
+        """
+        adj = defaultdict(list)
+        deg = defaultdict(int)
+        for a, b in edges:
+            adj[a].append(b)
+            adj[b].append(a)
+            deg[a] += 1
+            deg[b] += 1
+
+        ends = [n for n in nodes if deg[n] == 1]
+        if len(ends) != 2:
+            return None
+
+        start = ends[0]
+        order = [start]
+        prev = None
+        cur = start
+        while True:
+            nxts = [x for x in adj[cur] if x != prev]
+            if not nxts:
+                break
+            nxt = nxts[0]
+            order.append(nxt)
+            prev, cur = cur, nxt
+
+        if len(order) != len(nodes):
+            return None
+        return order
+
+    def stable_reorder_nodes(path_nodes):
+        """
+        Perrikiuoja mazgus pagal DOOR→SWING→OTHER→POWER.
+        Išlaikom stabilumą grupės viduje (tokia tvarka, kokia jie buvo kelyje).
+        """
+        buckets = {k: [] for k in PRIORITY.keys()}
+        for n in path_nodes:
+            g = group_of_node(n)
+            if g not in buckets:
+                g = "OTHER"
+            buckets[g].append(n)
+
+        # suklijuojam pagal prioritetą
+        ordered = []
+        for g, _prio in sorted(PRIORITY.items(), key=lambda kv: kv[1]):
+            ordered.extend(buckets.get(g, []))
+        return ordered
+
+    def path_edges_from_nodes(node_order):
+        return list(zip(node_order, node_order[1:]))
+
+    # ---- apdorojam per Wireno ----
+    for wir, grp in df.groupby(df["Wireno"].astype(str), sort=False):
+        idxs = list(grp.index)
+
+        rd_idxs = [i for i in idxs if lf_norm.get(i, "") == "RD"]
+        if len(rd_idxs) < 2:
             continue
 
-        # surenkam bazes iš RD subset
-        bases = set()
-        for idx in g_rd_idx:
-            bases.add(base(df.at[idx, "Name"]))
-            bases.add(base(df.at[idx, "Name.1"]))
-        bases = {b for b in bases if b and b.lower() != "nan"}
+        # Surenkam briaunas (RD eilutės) ir mazgus
+        edges = []
+        edge_row_idxs = []
+        nodes = set()
 
-        has_S = any(b.startswith("-S") for b in bases)
-        has_Q = any(b.startswith("-Q") for b in bases)
-        if not (has_S and has_Q):
+        for i in rd_idxs:
+            a = s(df.at[i, "Name"])
+            b = s(df.at[i, "Name.1"])
+            if not a or not b or a.lower() == "nan" or b.lower() == "nan":
+                continue
+            edges.append((a, b))
+            edge_row_idxs.append(i)
+            nodes.add(a)
+            nodes.add(b)
+
+        # būtinas paprastas kelias
+        if not is_simple_path(edges, nodes):
             continue
 
-        # orientuojam kiekvieną RD eilutę
-        for idx in g_rd_idx:
-            left  = str(df.at[idx, "Name"]).strip()
-            right = str(df.at[idx, "Name.1"]).strip()
-            lb = base(left)
-            rb = base(right)
+        # Ištraukiam realią kelio mazgų tvarką
+        path_nodes = extract_path_order(edges, nodes)
+        if not path_nodes:
+            continue
 
-            left_is_S  = lb.startswith("-S")
-            right_is_S = rb.startswith("-S")
-            left_is_Q  = lb.startswith("-Q")
-            right_is_Q = rb.startswith("-Q")
+        # Perrikiuojam pagal grupes
+        new_nodes = stable_reorder_nodes(path_nodes)
 
-            # jei -S yra dešinėje -> swap
-            if right_is_S and not left_is_S:
-                df.at[idx, "Name"], df.at[idx, "Name.1"] = right, left
-                left, right = right, left
-                lb, rb = rb, lb
-                left_is_Q, right_is_Q = right_is_Q, left_is_Q
+        # Jei niekas realiai nesikeičia – praleidžiam (idempotentiška)
+        if new_nodes == path_nodes:
+            continue
 
-            # jei -Q yra kairėje -> swap
-            if left_is_Q and not right_is_Q:
-                df.at[idx, "Name"], df.at[idx, "Name.1"] = right, left
+        # Naujos briaunos
+        new_edges = path_edges_from_nodes(new_nodes)
+
+        # Saugiklis: briaunų kiekis turi sutapti su RD eilučių kiekiu (kelyje)
+        # Kadangi grafas buvo paprastas kelias, edges==len(nodes)-1; new_edges bus toks pats sk.
+        if len(new_edges) != len(edges):
+            continue
+
+        # Perrašom TIK Name/Name.1 toms pačioms RD eilutėms.
+        # Kad būtų deterministiška: RD eilutes išrikiuojam pagal jų vietą pradiniame kelyje.
+        # Sukuriam map: (u,v) in original path order -> row_idx
+        # Pirmiausia atstatom original path edges eilės tvarka, tada priskiriam eilutes.
+        orig_path_edges = path_edges_from_nodes(path_nodes)
+
+        # Surandam konkrečią eilutę kiekvienai original briaunai (neorientuotas match)
+        remaining_rows = set(edge_row_idxs)
+        edge_to_row = {}
+
+        def pick_row_for_edge(u, v):
+            # ieškom eilutės, kur {Name,Name.1} == {u,v}
+            for ridx in list(remaining_rows):
+                a = s(df.at[ridx, "Name"])
+                b = s(df.at[ridx, "Name.1"])
+                if {a, b} == {u, v}:
+                    remaining_rows.remove(ridx)
+                    return ridx
+            return None
+
+        ok = True
+        for (u, v) in orig_path_edges:
+            r = pick_row_for_edge(u, v)
+            if r is None:
+                ok = False
+                break
+            edge_to_row[(u, v)] = r
+        if not ok:
+            continue
+
+        # Dabar perrašom tas pačias eilutes naujomis briaunomis 1..N-1
+        # Eilutės parenkamos pagal original path briaunų eilę (stabilu).
+        for k, (u_old, v_old) in enumerate(orig_path_edges):
+            row_idx = edge_to_row[(u_old, v_old)]
+            u_new, v_new = new_edges[k]
+
+            # perrašom tik Name/Name.1
+            df.at[row_idx, "Name"] = u_new
+            df.at[row_idx, "Name.1"] = v_new
 
     return df.reset_index(drop=True)
 
