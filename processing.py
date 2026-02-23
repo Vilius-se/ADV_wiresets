@@ -2191,8 +2191,10 @@ def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFra
     for wir, grp in df.groupby(df["Wireno"].astype(str), sort=False):
         idxs = list(grp.index)
 
-        rd_idxs = [i for i in idxs if lf_norm.get(i, "") == "RD"]
-        if len(rd_idxs) < 2:
+        TARGET_LF = {"RD", "DBU"}   # <-- čia gali pridėti daugiau
+
+        lf_idxs = [i for i in idxs if lf_norm.get(i, "") in TARGET_LF]
+        if len(lf_idxs) < 2:
             continue
 
         # Surenkam briaunas (RD eilutės) ir mazgus
@@ -2200,7 +2202,7 @@ def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFra
         edge_row_idxs = []
         nodes = set()
 
-        for i in rd_idxs:
+        for i in lf_idxs:
             a = s(df.at[i, "Name"])
             b = s(df.at[i, "Name.1"])
             if not a or not b or a.lower() == "nan" or b.lower() == "nan":
