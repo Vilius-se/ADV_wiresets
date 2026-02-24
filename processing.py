@@ -518,7 +518,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     unique_rows = []
     seen = set()
 
-    def add_unique(name, name1, wireno, func=""):
+    def add_unique(name, name1, wireno, func="", line_name="1,5"):
         if (name, name1) in seen or (name1, name) in seen:
             return
         seen.add((name, name1))
@@ -528,7 +528,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
             "Name.1":       name1,
             "Wireno":       wireno,
             "DaisyNo":      "0",
-            "Line-Name":    "1,5",
+            "Line-Name": line_name,
             "Line-Function":func
         })
         unique_rows.append(row)
@@ -592,8 +592,8 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     
     # 3) Create unique grounding rows for each EKF component
     for comp in sorted(ekf_comps):
-        add_unique(f"{comp}:GND",    "-X0102:0VDC", "0VDC", "DBU/WH")
-        add_unique(f"{comp}:~/-",     "-X0102:0VDC", "0VDC", "DBU/WH")
+        add_unique(f"{comp}:GND", "-X0102:0VDC", "0VDC", "DBU/WH", line_name="0,75")
+        add_unique(f"{comp}:~/-", "-X0102:0VDC", "0VDC", "DBU/WH", line_name="0,75")
 
 
     # 5. Collect meta for SPECIAL_WIRENOS
