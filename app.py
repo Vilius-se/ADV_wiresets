@@ -170,7 +170,17 @@ if st.session_state.stage == "eplan":
                 df_stage1 = stage1_pipeline_7(df_stage1)
                 df_stage1 = stage1_pipeline_8(df_stage1)
                 df_stage1 = stage1_pipeline_9(df_stage1)
-                group_symbols = parse_component_functions(df_component)
+                # --- FIX EPLAN STRUCTURE (=POWER+X-F128 → =POWER-F128) ---
+                df_component_fixed = df_component.copy()
+                col_name = df_component_fixed.columns[0]
+
+                df_component_fixed[col_name] = (
+                    df_component_fixed[col_name]
+                    .astype(str)
+                    .str.strip()
+                    .apply(lambda x: re.sub(r'(?<=^=[^+\-]+)\+[^-]*', '', x) if x.startswith("=") else x)
+                )
+                group_symbols = parse_component_functions(df_component_fixed)
                 # Convert group_symbols (GROUP -> [components])
                 # into component_to_group (component -> GROUP)
                 component_to_group = {}
