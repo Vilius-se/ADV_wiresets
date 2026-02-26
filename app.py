@@ -213,7 +213,7 @@ if st.session_state.stage == "eplan":
                 
                 # Display in Streamlit
                 st.markdown("### 🧩 ADV_WS_functions (after fix)")
-                st.dataframe(df_component_fixed, use_container_width=True, height=200)
+                st.dataframe(df_component_fixed, use_container_width=True, height=250)
             
                 
                 st.markdown("### Required Protective‐Earth (-XPE) Terminals")
