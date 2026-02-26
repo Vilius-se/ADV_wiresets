@@ -214,7 +214,15 @@ if st.session_state.stage == "eplan":
                 # Display in Streamlit
                 st.markdown("### 🧩 ADV_WS_functions (after fix)")
                 st.dataframe(df_component_fixed, use_container_width=True, height=250)
-            
+
+                st.markdown("### 🧩 ADV_WS group summary")
+                group_counts = {g: len(v) for g, v in group_symbols.items()}
+                summary_df = (
+                    pd.DataFrame([{"Group": g, "Count": c} for g, c in group_counts.items()])
+                      .sort_values(["Count", "Group"], ascending=[False, True])
+                      .reset_index(drop=True)
+                )
+                st.dataframe(summary_df, use_container_width=True, height=250)
                 
                 st.markdown("### Required Protective‐Earth (-XPE) Terminals")
                 st.metric("Number of -XPE terminals", xpe_terminals)
