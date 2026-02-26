@@ -212,6 +212,10 @@ if st.session_state.stage == "eplan":
                 xpe_terminals = -(-gnyc_count // 2)
                 
                 # Display in Streamlit
+                st.markdown("### 🧩 ADV_WS_functions (after fix)")
+                st.dataframe(df_component_fixed, use_container_width=True, height=500)
+            
+                
                 st.markdown("### Required Protective‐Earth (-XPE) Terminals")
                 st.metric("Number of -XPE terminals", xpe_terminals)
                 # ── Terminal Count Statistics ────────────────────────────────────────────────
