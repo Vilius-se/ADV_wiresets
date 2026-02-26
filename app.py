@@ -178,7 +178,7 @@ if st.session_state.stage == "eplan":
                     df_component_fixed[col_name]
                     .astype(str)
                     .str.strip()
-                    .apply(lambda x: re.sub(r'(?<=^=[^+\-]+)\+[^-]*', '', x) if x.startswith("=") else x)
+                    .apply(lambda x: re.sub(r'^(=[^+\-]+)\+[^-]*', r'\1', x) if isinstance(x, str) and x.strip().startswith("=") else x)
                 )
                 group_symbols = parse_component_functions(df_component_fixed)
                 # Convert group_symbols (GROUP -> [components])
