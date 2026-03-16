@@ -954,9 +954,22 @@ def stage1_pipeline_16(df: pd.DataFrame) -> pd.DataFrame:
     # 1) Work on remaining rows
     working = df.drop(force_keep.index)
 
-    # 1. Drop -Fxxx:x rows except -F9xx:x
-    pattern = re.compile(r'^-F(?!9\d{2}:\d$)(?!\d{2}8:2$)(?!8\d{2}:\d$)\d{3}:\d$')
-    mask_drop = working['Name'].str.match(pattern, na=False) | working['Name.1'].str.match(pattern, na=False)
+    # 1. Drop -Fxxx:x rows except selected cases
+    pattern_f = re.compile(r'^-F(?!9\d{2}:\d$)(?!\d{2}8:2$)(?!8\d{2}:\d$)\d{3}:\d$')
+
+    name_is_f = working['Name'].astype(str).str.match(pattern_f, na=False)
+    name1_is_f = working['Name.1'].astype(str).str.match(pattern_f, na=False)
+
+    # Keep F-X and F-S connections
+    name_is_xs = working['Name'].astype(str).str.match(r'^-[XS]', na=False)
+    name1_is_xs = working['Name.1'].astype(str).str.match(r'^-[XS]', na=False)
+
+    keep_fx_fs = (
+        (name_is_f & name1_is_xs) |
+        (name1_is_f & name_is_xs)
+    )
+
+    mask_drop = (name_is_f | name1_is_f) & ~keep_fx_fs
     working = working.loc[~mask_drop].reset_index(drop=True)
 
 
