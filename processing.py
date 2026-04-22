@@ -2603,7 +2603,7 @@ def stage2_pipeline_4(df):
     col_N = cols[col_N_idx]
     
     # Target prefixes that trigger the transformation
-    target_prefixes = ['-M923', '-M924', '-M925', '-X923', '-X924', '-X927', '-X928', '-XPE', '-XPE', '-X912']
+    target_prefixes = ['-M923', '-M924', '-M925', '-X923', '-X924', '-X927', '-X928', '-XPE', '-XPE']
     
     print(f"🔧 Pipeline 4: Processing {len(df)} rows for Ferrule updates")
     
