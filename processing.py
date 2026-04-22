@@ -2531,6 +2531,17 @@ def stage2_pipeline_2(df: pd.DataFrame) -> pd.DataFrame:
     
     # Clean up temporary columns
     df = df.drop(['Left_ID', 'Right_ID'], axis=1)
+
+    # Force X912 sides to Ferrule
+    for idx, row in df.iterrows():
+        left_component = str(row[col_C]).strip()
+        right_component = str(row[col_J]).strip()
+
+        if left_component == '-X912':
+            df.at[idx, col_E] = 'Ferrule'
+
+        if right_component == '-X912':
+            df.at[idx, col_L] = 'Ferrule'
     
     return df
 
