@@ -2291,6 +2291,359 @@ def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFra
 
     return df.reset_index(drop=True)
 
+def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pipeline 29
+    Veikia tik jei projekte yra 230VL2 / 230VN2 grandinės.
+    Logika:
+    1) Iš einamo df ištrina senas sugeneruotas eilutes su Wireno:
+       - 230VL2
+       - F903/L
+       - F903/L3
+       - 230VN2
+       - F903/N
+    2) Iš originalaus df atstato F903/L ir F903/N grandines taip, kad tvarka būtų:
+       F903:.. -> C90A1:.. -> optional -> X908:..
+    3) Iš originalaus df atstato 230VL2 / 230VN2 grandines:
+       - suranda visus F1x8 / F2x8 / F3x8 / F4x8 kandidatus
+       - palieka tik vieną vidurinį (jei lyginis kiekis -> kairįjį vidurinį)
+       - visus kitus F..8 išmeta
+       - paliktam viduriniam sukuria:
+            -X0100:230VL2 -> -F104:4 -> <middle F..8:1>
+            -X0100:230VN2 -> -F104:6 -> <middle F..8:N>
+         su Line-Name = 2,5
+       - visiems kitiems 230VL2 / 230VN2 komponentams sukuria:
+            -X0100:230..2 -> komponentas
+         su Line-Name = 1,5
+    """
+
+    df = df.copy()
+    df_original = df_original.copy()
+
+    required_cols = {"Name", "Name.1", "Wireno"}
+    if not required_cols.issubset(df.columns) or not required_cols.issubset(df_original.columns):
+        return df.reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # 0) Trigger: tik jei projekte yra VL2 / VN2
+    # ------------------------------------------------------------------
+    has_v2 = (
+        df["Wireno"].astype(str).str.contains(r"230VL2|230VN2", na=False).any()
+        or
+        df_original["Wireno"].astype(str).str.contains(r"230VL2|230VN2", na=False).any()
+    )
+    if not has_v2:
+        return df.reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    base_cols = list(df.columns)
+    for c in ["Name", "Name.1", "Wireno", "Line-Name", "Line-Function", "DaisyNo"]:
+        if c not in base_cols:
+            base_cols.append(c)
+
+    def make_blank_row():
+        return {c: "" for c in base_cols}
+
+    def sym_base(sym: str) -> str:
+        s = "" if pd.isna(sym) else str(sym).strip()
+        return s.split(":", 1)[0] if ":" in s else s
+
+    def is_f_group_candidate(sym: str) -> bool:
+        """
+        Kandidatai:
+          F1x8, F2x8, F3x8, F4x8
+        Pvz:
+          -F118, -F128, -F138, -F148, -F158, -F218, -F318, ...
+        """
+        s = "" if pd.isna(sym) else str(sym).strip()
+        b = sym_base(s)
+        return bool(re.match(r"^-F[1-4]\d8$", b))
+
+    def extract_f_order_number(sym: str):
+        """
+        Pvz:
+          -F118:1 -> 118
+          -F358:N -> 358
+        """
+        s = "" if pd.isna(sym) else str(sym).strip()
+        b = sym_base(s)
+        m = re.match(r"^-F(\d+)$", b)
+        return int(m.group(1)) if m else None
+
+    def row_has_any_symbol(row, predicate) -> bool:
+        return predicate(row.get("Name", "")) or predicate(row.get("Name.1", ""))
+
+    def collect_symbols_by_wireno(src: pd.DataFrame, wireno_value: str):
+        sub = src[src["Wireno"].astype(str).str.strip() == wireno_value].copy()
+        symbols = set()
+        for _, r in sub.iterrows():
+            for c in ("Name", "Name.1"):
+                s = str(r.get(c, "")).strip()
+                if s and s.lower() != "nan":
+                    symbols.add(s)
+        return sub, symbols
+
+    def choose_middle_candidate(symbols: set, pin_suffix: str):
+        """
+        Iš kandidatų palieka vieną vidurinį.
+        Jei lyginis kiekis -> kairysis vidurinis.
+        pin_suffix:
+          ':1' arba ':N'
+        """
+        candidates = []
+        for s in symbols:
+            if not is_f_group_candidate(s):
+                continue
+            if not str(s).endswith(pin_suffix):
+                continue
+            num = extract_f_order_number(s)
+            if num is None:
+                continue
+            candidates.append((num, s))
+
+        if not candidates:
+            return None, []
+
+        candidates.sort(key=lambda x: x[0])
+        ordered_syms = [s for _, s in candidates]
+        middle_idx = (len(ordered_syms) - 1) // 2
+        middle_sym = ordered_syms[middle_idx]
+        return middle_sym, ordered_syms
+
+    def find_f903_start_symbol(symbols: set, neutral: bool):
+        """
+        L pusei prioritetas:
+          -F903:2, -F903:1, -F903/L, -F903/L3
+        N pusei prioritetas:
+          -F903:N2, -F903:N, -F903/N
+        """
+        if neutral:
+            preferred = ["-F903:N2", "-F903:N", "-F903/N"]
+            fallback_pat = re.compile(r"^-F903(?::.*)?$")
+        else:
+            preferred = ["-F903:2", "-F903:1", "-F903/L3", "-F903/L"]
+            fallback_pat = re.compile(r"^-F903(?::.*)?$")
+
+        for p in preferred:
+            if p in symbols:
+                return p
+
+        for s in sorted(symbols):
+            if fallback_pat.match(s):
+                return s
+        return None
+
+    def find_c90a1_symbol(symbols: set):
+        for s in sorted(symbols):
+            if sym_base(s) == "-C90A1":
+                return s
+        return None
+
+    def find_x908_symbol(symbols: set):
+        for s in sorted(symbols):
+            if sym_base(s) == "-X908":
+                return s
+        return None
+
+    def find_optional_symbol(symbols: set, excluded_bases: set):
+        """
+        Pasirenkam vieną papildomą simbolį, jei yra.
+        """
+        for s in sorted(symbols):
+            b = sym_base(s)
+            if b not in excluded_bases:
+                return s
+        return None
+
+    def inherit_line_function(src: pd.DataFrame, symbol: str, default: str = ""):
+        if not symbol:
+            return default
+        for _, r in src.iterrows():
+            if str(r.get("Name", "")).strip() == symbol or str(r.get("Name.1", "")).strip() == symbol:
+                lf = str(r.get("Line-Function", "")).strip()
+                if lf and lf.lower() != "nan":
+                    return lf
+        return default
+
+    def add_row(rows_out, name, name1, wireno, line_name, line_function="", dno="0"):
+        r = make_blank_row()
+        r.update({
+            "Name": name,
+            "Name.1": name1,
+            "Wireno": wireno,
+            "Line-Name": line_name,
+            "Line-Function": line_function,
+            "DaisyNo": dno
+        })
+        rows_out.append(r)
+
+    # ------------------------------------------------------------------
+    # 1) Išvalom senas sugeneruotas eilutes
+    # ------------------------------------------------------------------
+    remove_wirenos = {"230VL2", "F903/L", "F903/L3", "230VN2", "F903/N"}
+    df = df[~df["Wireno"].astype(str).isin(remove_wirenos)].reset_index(drop=True)
+
+    new_rows = []
+
+    # ------------------------------------------------------------------
+    # 2) Atstatom F903/L ir F903/N grandines iš originalių duomenų
+    # ------------------------------------------------------------------
+    # L pusė: F903/L ir F903/L3
+    # N pusė: F903/N
+    for wireno_target, neutral in [("F903/L", False), ("F903/N", True)]:
+        # imame iš originalių duomenų eilutes, kuriose matosi F903*
+        src = df_original[
+            df_original["Wireno"].astype(str).str.contains(r"F903", na=False)
+            |
+            df_original["Name"].astype(str).str.contains(r"-F903", na=False)
+            |
+            df_original["Name.1"].astype(str).str.contains(r"-F903", na=False)
+        ].copy()
+
+        symbols = set()
+        for _, r in src.iterrows():
+            for c in ("Name", "Name.1"):
+                s = str(r.get(c, "")).strip()
+                if s and s.lower() != "nan":
+                    symbols.add(s)
+
+        start_sym = find_f903_start_symbol(symbols, neutral=neutral)
+        c90_sym = find_c90a1_symbol(symbols)
+        x908_sym = find_x908_symbol(symbols)
+
+        if start_sym and c90_sym and x908_sym:
+            excluded = {sym_base(start_sym), sym_base(c90_sym), sym_base(x908_sym)}
+            optional_sym = find_optional_symbol(symbols, excluded)
+
+            lf_default = "BU" if neutral else "BK"
+
+            add_row(
+                new_rows,
+                start_sym,
+                c90_sym,
+                wireno_target,
+                "1,5",
+                inherit_line_function(src, start_sym, lf_default),
+                "0"
+            )
+
+            if optional_sym:
+                add_row(
+                    new_rows,
+                    c90_sym,
+                    optional_sym,
+                    wireno_target,
+                    "1,5",
+                    inherit_line_function(src, c90_sym, lf_default),
+                    "0"
+                )
+                add_row(
+                    new_rows,
+                    optional_sym,
+                    x908_sym,
+                    wireno_target,
+                    "1,5",
+                    inherit_line_function(src, optional_sym, lf_default),
+                    "0"
+                )
+            else:
+                add_row(
+                    new_rows,
+                    c90_sym,
+                    x908_sym,
+                    wireno_target,
+                    "1,5",
+                    inherit_line_function(src, c90_sym, lf_default),
+                    "0"
+                )
+
+    # ------------------------------------------------------------------
+    # 3) Atstatom 230VL2 ir 230VN2 grandines iš originalių duomenų
+    # ------------------------------------------------------------------
+    for wireno_value, x_terminal, f104_sym, candidate_pin, lf_default in [
+        ("230VL2", "-X0100:230VL2", "-F104:4", ":1", "BK"),
+        ("230VN2", "-X0100:230VN2", "-F104:6", ":N", "BU"),
+    ]:
+        src, symbols = collect_symbols_by_wireno(df_original, wireno_value)
+        if src.empty:
+            continue
+
+        # Kandidatai F1x8/F2x8/F3x8/F4x8
+        middle_sym, ordered_candidates = choose_middle_candidate(symbols, pin_suffix=candidate_pin)
+
+        # 3.1) Paliktas vienas vidurinis F..8 per F104, Line-Name=2,5
+        if middle_sym:
+            add_row(
+                new_rows,
+                x_terminal,
+                f104_sym,
+                wireno_value,
+                "2,5",
+                lf_default,
+                "0"
+            )
+            add_row(
+                new_rows,
+                f104_sym,
+                middle_sym,
+                wireno_value,
+                "2,5",
+                inherit_line_function(src, middle_sym, lf_default),
+                "0"
+            )
+
+        # 3.2) Visi kiti likę 230VL2 / 230VN2 komponentai:
+        #      -X0100:230..2 -> komponentas, Line-Name=1,5
+        excluded_bases = {sym_base(f104_sym), sym_base(x_terminal)}
+        if middle_sym:
+            # Išmetam visus F..8, ne tik nepaliktus, bet apskritai visą F..8 grupę iš "others"
+            excluded_bases.update({sym_base(s) for s in ordered_candidates})
+
+        other_symbols = []
+        for s in sorted(symbols):
+            b = sym_base(s)
+            if b in excluded_bases:
+                continue
+            if not s or s.lower() == "nan":
+                continue
+            other_symbols.append(s)
+
+        seen_pairs = set()
+        for s in other_symbols:
+            pair = (x_terminal, s, wireno_value)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+
+            add_row(
+                new_rows,
+                x_terminal,
+                s,
+                wireno_value,
+                "1,5",
+                inherit_line_function(src, s, lf_default),
+                "0"
+            )
+
+    # ------------------------------------------------------------------
+    # 4) Pridedam naujas eilutes, dedupe, sort
+    # ------------------------------------------------------------------
+    if new_rows:
+        df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+
+    if {"Name", "Name.1", "Wireno"}.issubset(df.columns):
+        df = df.drop_duplicates(subset=["Name", "Name.1", "Wireno"], keep="first")
+
+    sort_cols = [c for c in ["Wireno", "DaisyNo", "Line-Name"] if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(by=sort_cols, ascending=True).reset_index(drop=True)
+
+    if "DaisyNo" in df.columns:
+        df["DaisyNo"] = df["DaisyNo"].astype(str)
+
+    return df.reset_index(drop=True)
 
 def stage2_pipeline_1(uploaded_file) -> pd.DataFrame:
     """
