@@ -2556,16 +2556,12 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         seen_added = set()
 
         # --------------------------------------------------------------
-        # Speciali taisyklė 230VN2 M92.. grandinėms:
+        # Speciali taisyklė 230VN2 M9.. grandinėms:
         # struktūra lieka kaip originale, bet:
         #   Wireno = 230VN2
         #   Line-Name = 1,5
+        # taikoma tik eilutėms, kur bent viena pusė yra -M9..
         # --------------------------------------------------------------
-        protected_motor_bases = {
-            "-M923", "-M924", "-M925",
-            "-X923", "-X924", "-X927", "-X928"
-        }
-
         if wireno_value == "230VN2":
             motor_rows = []
             used_motor_pairs = set()
@@ -2580,7 +2576,8 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
                 b1 = sym_base(n1)
                 b2 = sym_base(n2)
 
-                if b1 in protected_motor_bases or b2 in protected_motor_bases:
+                # Tik eilutės su -M9.. paliekamos originalia struktūra
+                if b1.startswith("-M9") or b2.startswith("-M9"):
                     pair_key = (n1, n2, wireno_value)
                     if pair_key in used_motor_pairs:
                         continue
@@ -2588,7 +2585,7 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
                     motor_rows.append((n1, n2))
 
-                    # kad nepatektų vėliau į X0100 generavimą
+                    # Kad vėliau šitie simboliai nepatektų į X0100 -> komponentas generavimą
                     excluded.add(b1)
                     excluded.add(b2)
 
@@ -2602,6 +2599,7 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
                     inherit_line_function(src, n1, "BU"),
                     "0"
                 )
+
         # --------------------------------------------------------------
         # Visi kiti likę šitos pačios grandinės komponentai:
         # X0100 -> komponentas, Line-Name 1,5
@@ -2624,7 +2622,7 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
                 "1,5",
                 inherit_line_function(src, s, lf_default),
                 "0"
-            )
+            )   
 
     # 4) Prijungiam atgal
     if new_rows:
