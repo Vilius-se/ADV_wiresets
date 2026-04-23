@@ -2542,8 +2542,6 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
                 "0"
             )
 
-        # Visi kiti likę šitos pačios grandinės komponentai:
-        # X0100 -> komponentas, Line-Name 1,5
         symbols = unique_symbols_from_src(src)
 
         excluded = {
@@ -2551,12 +2549,63 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
             sym_base(f104_sym),
         }
 
-        # Visi Fxx8 kandidatai pašalinami iš "kitų" komponentų
+        # visi Fxx8 kandidatai išmetami iš "kitų" komponentų
         for s in all_f_candidates:
             excluded.add(sym_base(s))
 
         seen_added = set()
 
+        # --------------------------------------------------------------
+        # Speciali taisyklė 230VN2 M92.. grandinėms:
+        # struktūra lieka kaip originale, bet:
+        #   Wireno = 230VN2
+        #   Line-Name = 1,5
+        # --------------------------------------------------------------
+        protected_motor_bases = {
+            "-M923", "-M924", "-M925",
+            "-X923", "-X924", "-X927", "-X928"
+        }
+
+        if wireno_value == "230VN2":
+            motor_rows = []
+            used_motor_pairs = set()
+
+            for _, r in src.iterrows():
+                n1 = str(r.get("Name", "")).strip()
+                n2 = str(r.get("Name.1", "")).strip()
+
+                if not n1 or not n2 or n1.lower() == "nan" or n2.lower() == "nan":
+                    continue
+
+                b1 = sym_base(n1)
+                b2 = sym_base(n2)
+
+                if b1 in protected_motor_bases or b2 in protected_motor_bases:
+                    pair_key = (n1, n2, wireno_value)
+                    if pair_key in used_motor_pairs:
+                        continue
+                    used_motor_pairs.add(pair_key)
+
+                    motor_rows.append((n1, n2))
+
+                    # kad nepatektų vėliau į X0100 generavimą
+                    excluded.add(b1)
+                    excluded.add(b2)
+
+            for n1, n2 in motor_rows:
+                add_row(
+                    new_rows,
+                    n1,
+                    n2,
+                    "230VN2",
+                    "1,5",
+                    inherit_line_function(src, n1, "BU"),
+                    "0"
+                )
+        # --------------------------------------------------------------
+        # Visi kiti likę šitos pačios grandinės komponentai:
+        # X0100 -> komponentas, Line-Name 1,5
+        # --------------------------------------------------------------
         for s in symbols:
             b = sym_base(s)
             if b in excluded:
