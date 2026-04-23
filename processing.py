@@ -2525,7 +2525,7 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         if middle_f:
             add_row(
                 new_rows,
-                x_terminal,
+                x_terminal + "_MAIN",
                 f104_sym,
                 wireno_value,
                 "2,5",
