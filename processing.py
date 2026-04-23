@@ -2586,8 +2586,10 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
                     motor_rows.append((n1, n2))
 
                     # Kad vėliau šitie simboliai nepatektų į X0100 -> komponentas generavimą
-                    excluded.add(b1)
-                    excluded.add(b2)
+                    if b1.startswith("-M9"):
+                        excluded.add(b1)
+                    if b2.startswith("-M9"):
+                        excluded.add(b2)
 
             for n1, n2 in motor_rows:
                 add_row(
