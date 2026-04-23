@@ -131,6 +131,7 @@ if st.session_state.stage == "eplan":
             try:
                 start_time = time.perf_counter()
                 df = pd.read_excel(uploaded_file)
+                df_original = df.copy()
                 end_time = time.perf_counter()
             except Exception as e:
                 st.error(f"⚠️ SYSTEM ERROR: {e}")
@@ -206,7 +207,7 @@ if st.session_state.stage == "eplan":
                 df_stage1 = stage1_pipeline_26(df_stage1)
                 df_stage1 = stage1_pipeline_27(df_stage1)
                 df_stage1 = stage1_pipeline_28(df_stage1, component_to_group)
-                df_stage1 = stage1_pipeline_29(df_stage1)
+                df_stage1 = stage1_pipeline_29(df_stage1, df_original)
                 # ── ADD THIS SNIPPET TO CALCULATE AND DISPLAY -XPE TERMINALS ─────────
                 # Count rows where Line-Function is GNYE
                 gnyc_count = (df_stage1['Line-Function'] == 'GNYE').sum()
