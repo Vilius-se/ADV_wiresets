@@ -2294,13 +2294,10 @@ def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFra
 def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
     """
     Pipeline 29
-
     Veikia tik jei projekte yra 230VL2 / 230VN2 grandinės.
-
     Svarbiausias principas:
     - kiekvienas Wireno tvarkomas atskirai
     - Wireno tarpusavyje nemaišomi
-
     Tvarkomi Wireno:
     - F903/L
     - F903/N
@@ -2310,6 +2307,7 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
     df = df.copy()
     df_original = df_original.copy()
+    df_original = stage1_pipeline_3(df_original)
 
     required_cols = {"Name", "Name.1", "Wireno"}
     if not required_cols.issubset(df.columns) or not required_cols.issubset(df_original.columns):
