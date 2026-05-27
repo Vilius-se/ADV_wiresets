@@ -2992,3 +2992,45 @@ def stage2_pipeline_4(df):
         print("✅ Pipeline 4: No matching conditions found, no updates made")
     
     return df
+
+def stage2_pipeline_5(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    targets = {"-X0100", "-X0101", "-X0102"}
+    letters = ["b", "c", "d", "e", "f", "g"]
+    counters = defaultdict(int)
+
+    def suffix_for(n: int) -> str:
+        index = (n - 1) % len(letters)
+        round_no = (n - 1) // len(letters)
+        return "_" + letters[index] + ("'" * round_no)
+
+    def already_numbered(pin: str) -> bool:
+        return bool(re.search(r"_[bcdefg]'+?$|_[bcdefg]$", pin, re.IGNORECASE))
+
+    column_pairs = [
+        ("Betriebsmittelkennzeichen", "Pin"),
+        ("Betriebsmittelkennzeichen.1", "Pin.1"),
+    ]
+
+    for comp_col, pin_col in column_pairs:
+        if comp_col not in df.columns or pin_col not in df.columns:
+            continue
+
+        for idx in df.index:
+            comp = str(df.at[idx, comp_col]).strip()
+            pin = str(df.at[idx, pin_col]).strip()
+
+            if comp.upper() not in targets:
+                continue
+            if not pin or "MAIN" in pin.upper():
+                continue
+            if already_numbered(pin):
+                continue
+
+            group_key = (comp.upper(), pin.upper())
+            counters[group_key] += 1
+
+            df.at[idx, pin_col] = pin + suffix_for(counters[group_key])
+
+    return df
