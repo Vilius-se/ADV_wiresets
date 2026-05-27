@@ -388,24 +388,22 @@ elif st.session_state.stage == "komax":
         st.dataframe(df_stage2.head(10), use_container_width=True, height=300)
 
         buf = BytesIO()
+        df_stage2.to_csv(
+            buf,
+            index=False,
+            sep=";",
+            encoding="utf-8-sig"
+        )
 
-    df_stage2.to_csv(
-        buf,
-        index=False,
-        sep=";",
-        encoding="utf-8-sig"
-    )
-
-    base2 = uploaded_csv.name[:8]
-    download_name2 = f"{base2}_ADV_DLW_IMPORT.csv"
+        base2 = uploaded_csv.name[:8]
+        download_name2 = f"{base2}_ADV_DLW_IMPORT.csv"
     
-    st.download_button(
-        "📥 Download Processed CSV",
-        buf.getvalue(),
-        file_name=download_name2,
-        mime="text/csv"
-    )
-
+        st.download_button(
+            "📥 Download Processed CSV",
+            buf.getvalue(),
+            file_name=download_name2,
+            mime="text/csv"
+        )
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
