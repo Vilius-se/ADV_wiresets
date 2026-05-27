@@ -2996,14 +2996,20 @@ def stage2_pipeline_4(df):
 def stage2_pipeline_5(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    targets = {"-X0100", "-X0101", "-X0102"}
-    letters = ["b", "c", "d", "e", "f", "g"]
+    target_components = {"-X0100", "-X0101", "-X0102", "-XPE"}
+
+    letter_map = {
+        "-XPE": ["b", "c"],
+        "default": ["b", "c", "d", "e", "f", "g"],
+    }
+
     counters = defaultdict(int)
 
-    def suffix_for(n: int) -> str:
+    def suffix_for(n: int, component: str) -> str:
+        letters = letter_map.get(component.upper(), letter_map["default"])
         index = (n - 1) % len(letters)
-        round_no = (n - 1) // len(letters)
-        return "_" + letters[index] + ("'" * round_no)
+        quote_count = (n - 1) // len(letters)
+        return "_" + letters[index] + ("'" * quote_count)
 
     def already_numbered(pin: str) -> bool:
         return bool(re.search(r"_[bcdefg]'+?$|_[bcdefg]$", pin, re.IGNORECASE))
@@ -3018,19 +3024,24 @@ def stage2_pipeline_5(df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         for idx in df.index:
-            comp = str(df.at[idx, comp_col]).strip()
+            comp = str(df.at[idx, comp_col]).strip().upper()
             pin = str(df.at[idx, pin_col]).strip()
 
-            if comp.upper() not in targets:
+            if comp not in target_components:
                 continue
-            if not pin or "MAIN" in pin.upper():
+
+            if not pin or pin.lower() == "nan":
                 continue
+
+            if "MAIN" in pin.upper():
+                continue
+
             if already_numbered(pin):
                 continue
 
-            group_key = (comp.upper(), pin.upper())
+            group_key = (comp, pin.upper())
             counters[group_key] += 1
 
-            df.at[idx, pin_col] = pin + suffix_for(counters[group_key])
+            df.at[idx, pin_col] = pin + suffix_for(counters[group_key], comp)
 
     return df
