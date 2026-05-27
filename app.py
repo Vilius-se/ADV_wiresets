@@ -41,7 +41,7 @@ from processing import (
     stage2_pipeline_1,
     stage2_pipeline_2,
     stage2_pipeline_4,
-    stage2_pipeline_5,
+    stage2_pipeline_5
 
 )
 
