@@ -41,6 +41,7 @@ from processing import (
     stage2_pipeline_1,
     stage2_pipeline_2,
     stage2_pipeline_4
+    stage2_pipeline_5
 
 )
 
@@ -377,6 +378,7 @@ elif st.session_state.stage == "komax":
             df_stage2 = stage2_pipeline_2(df_stage2)
             # df_stage2 = stage2_pipeline_3(df_stage2)
             df_stage2 = stage2_pipeline_4(df_stage2)
+            df_stage2 = stage2_pipeline_5(df_stage2)
         except Exception as e:
             st.error(f"Error processing CSV: {e}")
             st.stop()
