@@ -3045,3 +3045,19 @@ def stage2_pipeline_5(df: pd.DataFrame) -> pd.DataFrame:
             df.at[idx, pin_col] = pin + suffix_for(counters[group_key], comp)
 
     return df
+
+def stage2_final_text_to_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    if df.shape[1] == 1:
+        first_col = df.columns[0]
+
+        df = (
+            df[first_col]
+            .astype(str)
+            .str.split(",", expand=True)
+        )
+
+    df = df.fillna("").astype(str)
+
+    return df
