@@ -1748,13 +1748,13 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
                          'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'CONTROL'})
     
     # 10) X927/X928 PE rows - NEW ADDITION
-    x_terminals = ['-X927', '-X928']
-    for x_term in x_terminals:
-        if any(x_term in s for s in all_symbols):
-            new_rows.append({
-                'Name':f'{x_term}:PE','Name.1':'-XPE:PE','Wireno':'PE',
-                'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'POWER'
-            })
+    #x_terminals = ['-X927', '-X928']
+    #for x_term in x_terminals:
+    #    if any(x_term in s for s in all_symbols):
+    #        new_rows.append({
+    #            'Name':f'{x_term}:PE','Name.1':'-XPE:PE','Wireno':'PE',
+    #            'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'POWER'
+    #        })
     # Ensure all keys
     for row in new_rows:
         for c in base_cols:
