@@ -235,7 +235,7 @@ if st.session_state.stage == "eplan":
                 terminal_list = [
                     "-X0101:230VL", "-X0101:230VN", "-X0100:L3", "-X0100:230VL2",
                     "-X0100:N", "-X0100:230VN2", "-X0102:0VDC", "-X0102:24VDC",
-                    "-X0102:24VDC1", "-X0102:24VDC2"
+                    "-X0102:24VDC1", "-X0102:24VDC2", "-X0102:24VDC3"
                 ]
                 # Count occurrences in Name or Name.1
                 counts = {}
