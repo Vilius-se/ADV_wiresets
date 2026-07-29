@@ -47,7 +47,7 @@ from processing import (
 )
 
 st.set_page_config(
-    page_title="Advansor Wireset Helper",
+    page_title="Advansor Wireset Testas",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
