@@ -424,7 +424,7 @@ def parse_component_functions(df_f):
 
 def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     """
-     Pipeline 10 – universalus 24 VDC / 0 VDC paskirstymas.
+    Pipeline 10 – universalus 24 VDC / 0 VDC paskirstymas.
 
     Logika:
     - apdorojamos grupės: 0VDC, 24VDC, 24VDC1, 24VDC2 ir 24VDC3,
@@ -834,15 +834,31 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         if not endpoint:
             continue
 
-        main_source = endpoint
+        # 0VDC MAIN šaltinis yra TIESIOGINIS pasirinktos maitinimo
+        # šakos kontaktas prie -X0102:0VDC. Negalima imti šakos galo,
+        # nes už -C903:11 dar gali būti PE ar kita papildoma jungtis.
+        #
+        # Pvz.:
+        #   -X0102:0VDC -> -C903:11 -> -XPE
+        #
+        # MAIN turi būti -C903:11, o ne -XPE.
+        if wireno == "0VDC" and len(path_nodes) >= 2:
+            main_source = path_nodes[1]
+        else:
+            main_source = endpoint
 
-        # 24VDC1/2/3 atveju, jei terminalo šaka baigiasi saugiklio
-        # išėjimu, MAIN tašku tampa to paties saugiklio įėjimas.
-        if wireno in {"24VDC1", "24VDC2", "24VDC3"}:
-            fuse_input = paired_fuse_input(endpoint, all_symbols)
-
-            if fuse_input:
-                main_source = fuse_input
+        # 24VDC1/2/3 MAIN taškas turi būti tas kontaktas,
+        # kuris tiesiogiai jungiasi į atitinkamą -X0102 terminalą.
+        #
+        # Pvz.:
+        #   -X0102:24VDC1 -> -F903.1:2
+        #
+        # MAIN turi būti:
+        #   -F903.1:2 -> -X0102:24VDC1_MAIN
+        #
+        # Todėl į saugiklio įėjimą (:1) nepereinama.
+        if wireno in {"24VDC1", "24VDC2", "24VDC3"} and len(path_nodes) >= 2:
+            main_source = path_nodes[1]
 
         main_source_symbols.add(main_source)
         main_path_symbols.update(path_nodes)
