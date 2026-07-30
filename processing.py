@@ -464,8 +464,8 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     base_columns = list(df.columns)
 
     dc_wirenos = (
-        "24VDC",
         "0VDC",
+        "24VDC",
         "24VDC1",
         "24VDC2",
         "24VDC3",
@@ -903,6 +903,40 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
             df.at[index, "Line-Name"] = "1,5"
             df.at[index, "DaisyNo"] = "0"
+
+        # 24VDC1/2/3 relės kontakto maitinimo pusė yra 90/91 puslapio laidas.
+        # Pvz. -K918:11 -> porinis kontaktas -K918:14.
+        # Todėl eilutė -K918:14 -> -F904:2 taip pat turi būti 1,5 mm².
+        if wireno in {"24VDC1", "24VDC2", "24VDC3"}:
+            relay_component, relay_pin = split_endpoint(main_source)
+            supply_pin = ""
+
+            if relay_pin.isdigit():
+                pin_number = int(relay_pin)
+
+                # IEC kontaktų poros: 11->14, 21->24, 31->34, 41->44...
+                if pin_number % 10 == 1:
+                    supply_pin = str(pin_number + 3)
+
+            if supply_pin:
+                relay_supply_endpoint = f"{relay_component}:{supply_pin}"
+
+                for index, row in df.iterrows():
+                    row_wireno = clean(row.get("Wireno", ""))
+
+                    if not page_wire_pattern.fullmatch(row_wireno):
+                        continue
+
+                    name = clean(row.get("Name", ""))
+                    name_1 = clean(row.get("Name.1", ""))
+
+                    if (
+                        name == relay_supply_endpoint
+                        or name_1 == relay_supply_endpoint
+                    ):
+                        df.at[index, "Line-Name"] = "1,5"
+                        df.at[index, "DaisyNo"] = "0"
+                        main_path_symbols.add(relay_supply_endpoint)
 
         add_generated_row(
             main_source,
