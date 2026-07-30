@@ -992,6 +992,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
     if valid_main_rows:
         df.loc[valid_main_rows, "Line-Name"] = "1,5"
+        df.loc[valid_main_rows, "DaisyNo"] = "0"
 
     for index in valid_main_rows:
         main_path_symbols.add(
