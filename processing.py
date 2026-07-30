@@ -851,6 +851,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
     main_path_rows = set()
     main_path_symbols = set()
+    main_source_symbols = set()
 
     generated_rows = []
     generated_pairs = set()
@@ -893,6 +894,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
     if source_24v:
         main_path_rows.update(source_24v_rows)
+        main_source_symbols.add(source_24v)
 
         add_generated_row(
             source_24v,
@@ -911,6 +913,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
     if source_0v:
         main_path_rows.update(source_0v_rows)
+        main_source_symbols.add(source_0v)
 
         add_generated_row(
             source_0v,
@@ -970,6 +973,8 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
                 break
 
         if final_source:
+            main_source_symbols.add(final_source)
+            
             add_generated_row(
                 final_source,
                 f"{target_terminal}_MAIN",
@@ -998,11 +1003,16 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
     main_path_symbols.discard("")
 
-    # ------------------------------------------------------------------
-    # Likę 24 V / 0 V vartotojai grupuojami pagal group_symbols.
-    # ------------------------------------------------------------------
+    # Originalios DC paskirstymo eilutės, kurios panaudotos MAIN keliui
+    # nustatyti, galutiniame faile nepaliekamos.
+    # 90:xx ir 91:xx eilutės lieka, nes jų Wireno nėra dc_wirenos.
 
-    rows_to_remove = set()
+    rows_to_remove = {
+            index
+        for index in main_path_rows
+        if index in df.index
+        and clean(df.at[index, "Wireno"]) in dc_wirenos
+    }
 
     for wireno in dc_wirenos:
         section = df[df["Wireno"] == wireno]
@@ -1026,6 +1036,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         terminal = terminal_map[wireno]
 
         excluded_symbols = set(main_path_symbols)
+        excluded_symbols.update(main_source_symbols)
         excluded_symbols.add(terminal)
         excluded_symbols.add(f"{terminal}_MAIN")
 
