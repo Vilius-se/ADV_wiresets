@@ -464,8 +464,8 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     base_columns = list(df.columns)
 
     dc_wirenos = (
-        "0VDC",
         "24VDC",
+        "0VDC",
         "24VDC1",
         "24VDC2",
         "24VDC3",
