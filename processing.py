@@ -817,6 +817,10 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     main_path_symbols = set()
     rows_to_remove = set()
 
+    # 24VDC MAIN šaltinio komponentas vėliau naudojamas teisingam
+    # 0VDC grįžimo kontaktui parinkti.
+    main_24v_component = ""
+
     # ---------------------------------------------------------------
     # MAIN eilučių generavimas.
     # ---------------------------------------------------------------
@@ -834,18 +838,46 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         if not endpoint:
             continue
 
-        # 0VDC MAIN šaltinis yra TIESIOGINIS pasirinktos maitinimo
-        # šakos kontaktas prie -X0102:0VDC. Negalima imti šakos galo,
-        # nes už -C903:11 dar gali būti PE ar kita papildoma jungtis.
+        # 0VDC atveju pirmiausia ieškome tiesioginio X0102 kaimyno,
+        # priklausančio tam pačiam komponentui kaip 24VDC_MAIN šaltinis.
         #
         # Pvz.:
-        #   -X0102:0VDC -> -C903:11 -> -XPE
+        #   24VDC_MAIN = -C903:10
+        #   0VDC_MAIN  = -C903:11
         #
-        # MAIN turi būti -C903:11, o ne -XPE.
-        if wireno == "0VDC" and len(path_nodes) >= 2:
+        # Taip -K918:A2 (relės ritės grįžimas) nebebus palaikytas
+        # pagrindiniu 0VDC šaltiniu.
+        if wireno == "0VDC" and main_24v_component:
+            terminal = terminal_map["0VDC"]
+            matching_neighbour = ""
+
+            for neighbour, _ in dc_graphs["0VDC"].get(terminal, []):
+                if component_name(neighbour) == main_24v_component:
+                    matching_neighbour = neighbour
+                    break
+
+            if matching_neighbour:
+                path_nodes, path_rows = branch_from_terminal(
+                    "0VDC",
+                    terminal,
+                    matching_neighbour,
+                )
+                endpoint = path_nodes[-1] if path_nodes else matching_neighbour
+                main_source = matching_neighbour
+            elif len(path_nodes) >= 2:
+                main_source = path_nodes[1]
+            else:
+                main_source = endpoint
+
+        elif wireno == "0VDC" and len(path_nodes) >= 2:
             main_source = path_nodes[1]
+
         else:
             main_source = endpoint
+
+        # 24VDC MAIN šaltinio komponentą įsimename prieš apdorojant 0VDC.
+        if wireno == "24VDC":
+            main_24v_component = component_name(main_source)
 
         # 24VDC1/2/3 MAIN taškas turi būti tas kontaktas,
         # kuris tiesiogiai jungiasi į atitinkamą -X0102 terminalą.
