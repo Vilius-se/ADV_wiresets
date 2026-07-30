@@ -77,7 +77,8 @@ def stage1_pipeline_3(df: pd.DataFrame) -> pd.DataFrame:
         "0VDC.": "0VDC",
         "24VDC.": "24VDC",
         "24VDC1.": "24VDC1",
-        "24VDC2.": "24VDC2"
+        "24VDC2.": "24VDC2",
+        "24VDC3.": "24VDC3"
     }
     for col in df.columns:
         df[col] = df[col].astype(str)
@@ -422,7 +423,7 @@ def parse_component_functions(df_f):
 
 
 def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
-     """
+    """
     Pipeline 10 – tik naujas 24 VDC / 0 VDC apdorojimas.
     Apdoroja:
         0VDC
