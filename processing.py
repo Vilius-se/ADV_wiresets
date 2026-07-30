@@ -422,16 +422,14 @@ def parse_component_functions(df_f):
 
 
 def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
- """
+     """
     Pipeline 10 – tik naujas 24 VDC / 0 VDC apdorojimas.
-
     Apdoroja:
         0VDC
         24VDC
         24VDC1
         24VDC2
         24VDC3
-
     Logika:
         • atkuria realią paskirstymo topologiją;
         • pagrindinius paskirstymo kelius pažymi 1,5 mm²;
@@ -440,7 +438,6 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         • likusius vartotojus grupuoja pagal group_symbols;
         • vartotojų daisy chain nustato 0,75 mm²;
         • 24VDC3 apdoroja tik tada, kai jis realiai egzistuoja faile.
-
     Funkcijoje nėra 230 V logikos ir nėra konkrečių F903/F904/K918/C903
     komponentų pavadinimų.
     """
