@@ -1007,12 +1007,22 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     # nustatyti, galutiniame faile nepaliekamos.
     # 90:xx ir 91:xx eilutės lieka, nes jų Wireno nėra dc_wirenos.
 
-    rows_to_remove = {
-            index
-        for index in main_path_rows
-        if index in df.index
-        and clean(df.at[index, "Wireno"]) in dc_wirenos
-    }
+    rows_to_remove = set()
+
+    for index, row in df.iterrows():
+        wireno = clean(row.get("Wireno", ""))
+
+        if wireno not in dc_wirenos:
+            continue
+
+        name = clean(row.get("Name", ""))
+        name_1 = clean(row.get("Name.1", ""))
+
+        if (
+            name in main_source_symbols
+            or name_1 in main_source_symbols
+        ):
+            rows_to_remove.add(index)
 
     for wireno in dc_wirenos:
         section = df[df["Wireno"] == wireno]
