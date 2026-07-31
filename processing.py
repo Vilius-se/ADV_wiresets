@@ -427,7 +427,21 @@ def parse_component_functions(df_f):
 # Ši funkcija tiesiogiai app.py nekviečiama.
 # Ją kviečia P11 (24 VDC) ir P12 (230 VAC).
 # ==========================================================
-def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> pd.DataFrame:
+def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> pd.DataFrame:
+    """
+    Bendras paskirstymo grandinių algoritmas.
+
+    config pagrindiniai laukai:
+      wirenos                – apdorojimo tvarka;
+      terminal_map           – Wireno -> tikslus terminalas arba terminalo komponentas;
+      default_function       – Wireno -> Line-Function;
+      main_line_name         – MAIN ir maitinimo kelio skerspjūvis;
+      daisy_line_name        – vartotojų daisy skerspjūvis;
+      source_modes           – Wireno -> source parinkimo būdas;
+      paired_main            – pvz. 0VDC turi naudoti 24VDC komponentą;
+      direct_terminal_main   – MAIN yra tiesioginis terminalo kaimynas;
+      relay_supply_groups    – 11->14, 21->24... puslapio laidų taisymas;
+      downstream_wirenos     – grupės, pagal kurias vertinama pagrindinė šaka.
     """
     import re
     from collections import defaultdict
@@ -533,49 +547,49 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
         graphs[wireno][name].append((name_1, index))
         graphs[wireno][name_1].append((name, index))
 
-        def resolve_terminal(wireno):
-            """
-            Suranda realų paskirstymo terminalo kontaktą.
-    
-            terminal_map gali turėti:
-            - tikslų simbolį, pvz. -X0102:24VDC;
-            - tik komponentą, pvz. -X0100 arba -X0101.
-    
-            Kai pateiktas tik komponentas, kontaktas paimamas iš realių
-            to Wireno jungčių. Todėl F903/L3 gali būti prijungtas prie
-            -X0100:L3, o F903/N – prie -X0100:N.
-            """
-            terminal_hint = clean(terminal_map.get(wireno, ""))
-            if not terminal_hint:
-                return ""
-    
-            graph = graphs.get(wireno, {})
-    
-            # Jei konfigūracijoje pateiktas tikslus kontaktas ir jis yra faile.
-            if terminal_hint in graph:
-                return terminal_hint
-    
-            # Jei pateiktas tik komponentas, randamas realus jo kontaktas.
-            candidates = [
-                symbol
-                for symbol in graph
-                if component_name(symbol) == terminal_hint
-            ]
-    
-            if not candidates:
-                return ""
-    
-            # Dažniausiai vienas paskirstymo kontaktas turi dvi jungtis:
-            # MAIN ir daisy. Todėl pirmiausia renkamės didžiausio laipsnio mazgą.
-            candidates.sort(
-                key=lambda symbol: (
-                    len(graph.get(symbol, [])),
-                    symbol,
-                ),
-                reverse=True,
-            )
-    
-            return candidates[0]
+    def resolve_terminal(wireno):
+        """
+        Suranda realų paskirstymo terminalo kontaktą.
+
+        terminal_map gali turėti:
+        - tikslų simbolį, pvz. -X0102:24VDC;
+        - tik komponentą, pvz. -X0100 arba -X0101.
+
+        Kai pateiktas tik komponentas, kontaktas paimamas iš realių
+        to Wireno jungčių. Todėl F903/L3 gali būti prijungtas prie
+        -X0100:L3, o F903/N – prie -X0100:N.
+        """
+        terminal_hint = clean(terminal_map.get(wireno, ""))
+        if not terminal_hint:
+            return ""
+
+        graph = graphs.get(wireno, {})
+
+        # Jei konfigūracijoje pateiktas tikslus kontaktas ir jis yra faile.
+        if terminal_hint in graph:
+            return terminal_hint
+
+        # Jei pateiktas tik komponentas, randamas realus jo kontaktas.
+        candidates = [
+            symbol
+            for symbol in graph
+            if component_name(symbol) == terminal_hint
+        ]
+
+        if not candidates:
+            return ""
+
+        # Dažniausiai vienas paskirstymo kontaktas turi dvi jungtis:
+        # MAIN ir daisy. Todėl pirmiausia renkamės didžiausio laipsnio mazgą.
+        candidates.sort(
+            key=lambda symbol: (
+                len(graph.get(symbol, [])),
+                symbol,
+            ),
+            reverse=True,
+        )
+
+        return candidates[0]
 
     def branch_from_terminal(wireno, terminal, first_neighbour):
         """
@@ -939,31 +953,6 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
             df.at[index, "Line-Name"] = main_line_name
             df.at[index, "DaisyNo"] = "0"
 
-        # 230 VAC MAIN kelio tarpinės jungtys.
-        # Jei MAIN šaltinio komponentas turi jungčių su puslapio laidais
-        # 90:xx / 91:xx, jos taip pat laikomos MAIN ir gauna 1,5 mm².
-        if source_modes.get(wireno) == "wireno_origin":
-            source_component = component_name(main_source)
-
-            for index, row in df.iterrows():
-                row_wireno = clean(row.get("Wireno", ""))
-
-                if not page_wire_pattern.fullmatch(row_wireno):
-                    continue
-
-                name = clean(row.get("Name", ""))
-                name_1 = clean(row.get("Name.1", ""))
-
-                if (
-                    component_name(name) == source_component
-                    or component_name(name_1) == source_component
-                ):
-                    df.at[index, "Line-Name"] = main_line_name
-                    df.at[index, "DaisyNo"] = "0"
-
-                    main_path_symbols.add(name)
-                    main_path_symbols.add(name_1)
-        
         # Tik P11 DC konfigūracijoje aktyvi 11->14, 21->24... taisyklė.
         if wireno in relay_supply_groups:
             relay_component, relay_pin = split_endpoint(main_source)
@@ -1170,6 +1159,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
     )
 
     return df.reset_index(drop=True)
+    
 
 
 # ==========================================================
