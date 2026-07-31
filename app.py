@@ -17,7 +17,6 @@ from processing import (
     stage1_pipeline_7_1,
     stage1_pipeline_8,
     stage1_pipeline_9,
-    stage1_pipeline_10,
     stage1_pipeline_11,
     stage1_pipeline_12,
     stage1_pipeline_13,
@@ -194,9 +193,8 @@ if st.session_state.stage == "eplan":
                         component_to_group[sym] = group.upper()
                 df_stage1 = stage1_pipeline_16(df_stage1)
                 df_stage1 = stage1_pipeline_7_1(df_stage1)
-                df_stage1 = stage1_pipeline_10(df_stage1, group_symbols)
-                df_stage1 = stage1_pipeline_11(df_stage1)
-                df_stage1 = stage1_pipeline_12(df_stage1)
+                df_stage1 = stage1_pipeline_11(df_stage1, group_symbols)
+                df_stage1 = stage1_pipeline_12(df_stage1, group_symbols)
                 df_stage1 = stage1_pipeline_13(df_stage1)
                 df_stage1 = stage1_pipeline_15(df_stage1)
                 df_stage1 = stage1_pipeline_17(df_stage1)
