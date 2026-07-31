@@ -748,9 +748,13 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
                 best = candidate
                 continue
 
+            # Jei keli kandidatai vienodo stiprumo, renkamės toliau nuo
+            # paskirstymo terminalo esantį komponentą. Taip MAIN kelias
+            # nenutrūksta ties tarpiniu kontaktoriumi / rele, o tęsiasi
+            # iki tikrosios grandinės pradžios, pvz. saugiklio.
             if (
                 candidate["strength"] == best["strength"]
-                and candidate["distance"] < best["distance"]
+                and candidate["distance"] > best["distance"]
             ):
                 best = candidate
 
@@ -1160,8 +1164,6 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
 
     return df.reset_index(drop=True)
     
-
-
 # ==========================================================
 # PIPELINE 11 – 24 VDC PASKIRSTYMAS
 # ==========================================================
