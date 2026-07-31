@@ -1299,61 +1299,6 @@ def stage1_pipeline_14(df: pd.DataFrame) -> pd.DataFrame:
     return df_filtered
 
 
-def stage1_pipeline_15(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Stage 1 Pipeline 15 - Correct Line-Function values based on Wireno mapping
-
-    Checks if the Line-Function value matches the expected value for each Wireno
-    according to POTENTIAL_MAP and corrects it if it doesn't match.
-
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        Input DataFrame
-
-    Returns:
-    --------
-    pd.DataFrame
-        DataFrame with corrected Line-Function values
-    """
-
-    df = df.copy()
-
-    # Define the potential mapping
-    POTENTIAL_MAP = {
-        "230VL": "RD",
-        "230VN": "RD/WH",
-        "F903/L": "BK",
-        "F903/L3": "BK",
-        "230VL2": "BK",
-        "F903/N": "BU",
-        "230VN2": "BU",
-        "0VDC": "DBU/WH",
-        "24VDC": "DBU",
-        "24VDC1": "DBU",
-        "24VDC2": "DBU",
-    }
-
-    # Check if required columns exist
-    if 'Wireno' not in df.columns or 'Line-Function' not in df.columns:
-        return df
-
-    # Iterate through rows and correct Line-Function values
-    for idx, row in df.iterrows():
-        wireno = str(row['Wireno']).strip()
-
-        # If this Wireno is in our mapping
-        if wireno in POTENTIAL_MAP:
-            expected_line_function = POTENTIAL_MAP[wireno]
-            current_line_function = str(row['Line-Function']).strip()
-
-            # If current value doesn't match expected value, correct it
-            if current_line_function != expected_line_function:
-                df.at[idx, 'Line-Function'] = expected_line_function
-
-    return df
-
-
 def stage1_pipeline_16(df: pd.DataFrame) -> pd.DataFrame:
     """
     Stage 1 Pipeline 16 – Enhanced with -X102 protection
@@ -1386,32 +1331,6 @@ def stage1_pipeline_16(df: pd.DataFrame) -> pd.DataFrame:
 
     mask_drop = (name_is_f | name1_is_f) & ~keep_fx_fs
     working = working.loc[~mask_drop].reset_index(drop=True)
-
-
-    # 2. Check for 230VL2/VN2 anywhere
-    has_230vl2_or_230vn2 = (
-        working['Name'].str.contains('230VL2|230VN2', na=False).any() or
-        working['Name.1'].str.contains('230VL2|230VN2', na=False).any() or
-        working['Wireno'].str.contains('230VL2|230VN2', na=False).any()
-    )
-
-    if has_230vl2_or_230vn2:
-        mask_t901 = working['Name'].astype(str).str.startswith('-T901:') | working['Name.1'].astype(str).str.startswith('-T901:')
-        working = working.loc[~mask_t901].reset_index(drop=True)
-
-    # 3. Only add T901 supply row if NO 230VL2/VN2 present anywhere
-    if not has_230vl2_or_230vn2:
-        base_cols = working.columns.tolist()
-        new_row = {c: "" for c in base_cols}
-        new_row.update({
-            'Name': "-T901:0 V'",
-            'Name.1': "-T901:115 V'",
-            'Wireno': '90:10',
-            'Line-Name': '1,5',
-            'Line-Function': 'RD',
-            'DaisyNo': '0'
-        })
-        working = pd.concat([working, pd.DataFrame([new_row])], ignore_index=True)
 
     # 4) Re-attach the -X102:* rows
     result = pd.concat([working, force_keep], ignore_index=True)
@@ -1530,110 +1449,6 @@ def stage1_pipeline_18(df: pd.DataFrame) -> pd.DataFrame:
         print("✅ Pipeline 18: No swapped duplicates found")
     
     return df_dedup.reset_index(drop=True)
-
-
-def stage1_pipeline_19(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Stage 1 Pipeline 19 - Handle 230VN2/230VL2 presence and related cleanup
-    
-    Logic:
-    1. Check if Wireno column contains 230VN2 or 230VL2
-    2. If true:
-       - Delete all rows containing -T901 and -F901.1 in Name or Name.1
-       - Check if there are any -F901: values in Name or Name.1
-       - If no -F901: values exist, create two specific rows
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        Input DataFrame
-        
-    Returns:
-    --------
-    pd.DataFrame
-        Cleaned DataFrame with appropriate modifications
-    """
-    
-    df = df.copy()
-    
-    # Step 1: Check if Wireno column contains 230VN2 or 230VL2
-    has_230vn2_or_230vl2 = False
-    if 'Wireno' in df.columns:
-        has_230vn2_or_230vl2 = df['Wireno'].str.contains('230VN2|230VL2', na=False).any()
-    
-    print(f"🔍 Pipeline 19: 230VN2/230VL2 detected in Wireno: {has_230vn2_or_230vl2}")
-    
-    if has_230vn2_or_230vl2:
-        # Step 2: Delete all rows that contain -T901 OR -F901.1 in Name or Name.1
-        initial_count = len(df)
-        mask_t901_f901_1 = (
-            df['Name'].astype(str).str.contains('-T901|-F901\\.1', na=False, regex=True) |
-            df['Name.1'].astype(str).str.contains('-T901|-F901\\.1', na=False, regex=True)
-        )
-        df = df[~mask_t901_f901_1].reset_index(drop=True)
-        removed_rows = initial_count - len(df)
-        if removed_rows > 0:
-            print(f"✂️ Pipeline 19: Removed {removed_rows} rows containing -T901 or -F901.1")
-        
-        # Step 3: Check if there are any -F901: values in Name or Name.1
-        has_f901 = (
-            df['Name'].astype(str).str.contains('-F901:', na=False).any() or
-            df['Name.1'].astype(str).str.contains('-F901:', na=False).any()
-        )
-        
-        print(f"🔍 Pipeline 19: -F901: values detected: {has_f901}")
-        
-        # Step 4: If no -F901: values, create the two specific rows
-        if not has_f901:
-            base_cols = df.columns.tolist()
-            
-            # Ensure all required columns exist
-            required_cols = ['Name', 'Name.1', 'Wireno', 'Line-Name', 'Line-Function', 'DaisyNo']
-            for col in required_cols:
-                if col not in base_cols:
-                    base_cols.append(col)
-            
-            new_rows = [
-                # Row 1: -F901:2 → -X0101:230VL
-                {col: "" for col in base_cols} | {
-                    'Name': '-F901:2',
-                    'Name.1': '-X0101:230VL',
-                    'Wireno': '230VL',
-                    'Line-Name': '1,5',
-                    'Line-Function': 'RD',
-                    'DaisyNo': 'CONTROLS'
-                },
-                # Row 2: -F901:N2 → -X0101:230VN
-                {col: "" for col in base_cols} | {
-                    'Name': '-F901:N2',
-                    'Name.1': '-X0101:230VN',
-                    'Wireno': '230VN',
-                    'Line-Name': '1,5',
-                    'Line-Function': 'RD/WH',
-                    'DaisyNo': 'CONTROLS'
-                }
-            ]
-            
-            df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
-            print("✅ Pipeline 19: Added 2 new -F901: rows")
-    
-    # Final cleanup and sorting
-    sort_columns = []
-    if 'Wireno' in df.columns:
-        sort_columns.append('Wireno')
-    if 'DaisyNo' in df.columns:
-        sort_columns.append('DaisyNo')
-    if 'Line-Name' in df.columns:
-        sort_columns.append('Line-Name')
-    
-    if sort_columns:
-        df = df.sort_values(by=sort_columns, ascending=True).reset_index(drop=True)
-    
-    if 'DaisyNo' in df.columns:
-        df['DaisyNo'] = df['DaisyNo'].astype(str)
-    
-    print(f"📊 Pipeline 19: Final result - {len(df)} rows")
-    return df
 
 
 def stage1_pipeline_20(df: pd.DataFrame) -> pd.DataFrame:
@@ -1903,33 +1718,6 @@ def stage1_pipeline_22(df: pd.DataFrame) -> pd.DataFrame:
         df_filtered = pd.concat([df_filtered, pd.DataFrame(new_rows)], ignore_index=True)
     return df_filtered.reset_index(drop=True)
 
-
-
-def stage1_pipeline_23(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Stage 1 Pipeline 23 – Preserve only _MAIN terminal rows.
-
-    1. Identify all (Name, base_Name1) pairs where Name.1 contains '_MAIN'.
-       base_Name1 is Name.1 with '_MAIN' stripped.
-    2. For each such pair, delete any row where Name and Name.1 match the pair
-       but Name.1 does NOT contain '_MAIN'.
-    """
-    df = df.copy()
-    # 1. Collect pairs from rows with '_MAIN' in Name.1
-    main_pairs = {
-        (row['Name'], row['Name.1'].replace('_MAIN', '', 1))
-        for _, row in df.iterrows()
-        if isinstance(row.get('Name.1'), str) and '_MAIN' in row['Name.1']
-    }
-    # 2. Filter out non-_MAIN duplicates
-    def keep_row(row):
-        for name, base_name1 in main_pairs:
-            if row['Name'] == name and row['Name.1'] == base_name1:
-                # drop this non-MAIN duplicate
-                return False
-        return True
-
-    return df[df.apply(keep_row, axis=1)].reset_index(drop=True)
 
 def stage1_pipeline_24(df):
     """
