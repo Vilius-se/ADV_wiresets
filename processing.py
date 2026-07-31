@@ -533,49 +533,49 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
         graphs[wireno][name].append((name_1, index))
         graphs[wireno][name_1].append((name, index))
 
-    def resolve_terminal(wireno):
-        """
-        Suranda realų paskirstymo terminalo kontaktą.
-
-        terminal_map gali turėti:
-        - tikslų simbolį, pvz. -X0102:24VDC;
-        - tik komponentą, pvz. -X0100 arba -X0101.
-
-        Kai pateiktas tik komponentas, kontaktas paimamas iš realių
-        to Wireno jungčių. Todėl F903/L3 gali būti prijungtas prie
-        -X0100:L3, o F903/N – prie -X0100:N.
-        """
-        terminal_hint = clean(terminal_map.get(wireno, ""))
-        if not terminal_hint:
-            return ""
-
-        graph = graphs.get(wireno, {})
-
-        # Jei konfigūracijoje pateiktas tikslus kontaktas ir jis yra faile.
-        if terminal_hint in graph:
-            return terminal_hint
-
-        # Jei pateiktas tik komponentas, randamas realus jo kontaktas.
-        candidates = [
-            symbol
-            for symbol in graph
-            if component_name(symbol) == terminal_hint
-        ]
-
-        if not candidates:
-            return ""
-
-        # Dažniausiai vienas paskirstymo kontaktas turi dvi jungtis:
-        # MAIN ir daisy. Todėl pirmiausia renkamės didžiausio laipsnio mazgą.
-        candidates.sort(
-            key=lambda symbol: (
-                len(graph.get(symbol, [])),
-                symbol,
-            ),
-            reverse=True,
-        )
-
-        return candidates[0]
+        def resolve_terminal(wireno):
+            """
+            Suranda realų paskirstymo terminalo kontaktą.
+    
+            terminal_map gali turėti:
+            - tikslų simbolį, pvz. -X0102:24VDC;
+            - tik komponentą, pvz. -X0100 arba -X0101.
+    
+            Kai pateiktas tik komponentas, kontaktas paimamas iš realių
+            to Wireno jungčių. Todėl F903/L3 gali būti prijungtas prie
+            -X0100:L3, o F903/N – prie -X0100:N.
+            """
+            terminal_hint = clean(terminal_map.get(wireno, ""))
+            if not terminal_hint:
+                return ""
+    
+            graph = graphs.get(wireno, {})
+    
+            # Jei konfigūracijoje pateiktas tikslus kontaktas ir jis yra faile.
+            if terminal_hint in graph:
+                return terminal_hint
+    
+            # Jei pateiktas tik komponentas, randamas realus jo kontaktas.
+            candidates = [
+                symbol
+                for symbol in graph
+                if component_name(symbol) == terminal_hint
+            ]
+    
+            if not candidates:
+                return ""
+    
+            # Dažniausiai vienas paskirstymo kontaktas turi dvi jungtis:
+            # MAIN ir daisy. Todėl pirmiausia renkamės didžiausio laipsnio mazgą.
+            candidates.sort(
+                key=lambda symbol: (
+                    len(graph.get(symbol, [])),
+                    symbol,
+                ),
+                reverse=True,
+            )
+    
+            return candidates[0]
 
     def branch_from_terminal(wireno, terminal, first_neighbour):
         """
