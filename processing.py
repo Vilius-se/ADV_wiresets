@@ -422,7 +422,7 @@ def parse_component_functions(df_f):
     return results
 
 
-def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
+def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     """
     Pipeline 10 – universalus 24 VDC / 0 VDC paskirstymas.
 
@@ -1123,7 +1123,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
     return df.reset_index(drop=True)
 
-def stage1_pipeline_12(df: pd.DataFrame) -> pd.DataFrame:
+def stage1_pipeline_13(df: pd.DataFrame) -> pd.DataFrame:
     """
     Enhanced pipeline 12 that Line-Name and Line-Function values using EXACT matching only
     2. Searches both Name AND Name.1 columns for exact matches
@@ -1202,7 +1202,7 @@ def stage1_pipeline_12(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def stage1_pipeline_13(df: pd.DataFrame) -> pd.DataFrame:
+def stage1_pipeline_14(df: pd.DataFrame) -> pd.DataFrame:
     """
     Prepare dataframe for manual editing by:
     1. Replacing cells containing 'Error' with empty strings
@@ -1253,7 +1253,7 @@ def identify_blank_cells(df: pd.DataFrame) -> dict:
     return blank_cells
 
 
-def stage1_pipeline_14(df: pd.DataFrame) -> pd.DataFrame:
+def stage1_pipeline_15(df: pd.DataFrame) -> pd.DataFrame:
     """
     Stage 1 Pipeline 14 - Remove rows with specific pattern and POWER in DaisyNo
 
