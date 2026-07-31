@@ -1062,10 +1062,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
 # ==========================================================
 # PIPELINE 11 – 24 VDC PASKIRSTYMAS
 # ==========================================================
-def stage1_pipeline_11(
-    df: pd.DataFrame,
-    group_symbols: dict,
-) -> pd.DataFrame:
+def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     """
     24 VDC / 0 VDC paskirstymas per bendrą P10 branduolį.
     """
@@ -1141,10 +1138,7 @@ def stage1_pipeline_11(
 # ==========================================================
 # PIPELINE 12 – 230 VAC PASKIRSTYMAS
 # ==========================================================
-def stage1_pipeline_12(
-    df: pd.DataFrame,
-    group_symbols: dict,
-) -> pd.DataFrame:
+def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     """
     X0100 ir X0101 230 VAC paskirstymas per bendrą P10 branduolį.
 
