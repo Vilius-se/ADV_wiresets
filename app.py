@@ -18,11 +18,12 @@ from processing import (
     stage1_pipeline_8,
     stage1_pipeline_9,
     stage1_pipeline_10,
+    stage1_pipeline_11,
     stage1_pipeline_12,
-    parse_component_functions,
     stage1_pipeline_13,
-    identify_blank_cells,
+    parse_component_functions,
     stage1_pipeline_14,
+    identify_blank_cells,
     stage1_pipeline_15,
     stage1_pipeline_16,
     stage1_pipeline_17,
@@ -194,8 +195,9 @@ if st.session_state.stage == "eplan":
                 df_stage1 = stage1_pipeline_16(df_stage1)
                 df_stage1 = stage1_pipeline_7_1(df_stage1)
                 df_stage1 = stage1_pipeline_10(df_stage1, group_symbols)
+                df_stage1 = stage1_pipeline_11(df_stage1)
                 df_stage1 = stage1_pipeline_12(df_stage1)
-                df_stage1 = stage1_pipeline_14(df_stage1)
+                df_stage1 = stage1_pipeline_13(df_stage1)
                 df_stage1 = stage1_pipeline_15(df_stage1)
                 df_stage1 = stage1_pipeline_17(df_stage1)
                 df_stage1 = stage1_pipeline_18(df_stage1)
@@ -256,7 +258,7 @@ if st.session_state.stage == "eplan":
 
 
                 # Prepare for editing and identify blank cells
-                df_stage1 = stage1_pipeline_13(df_stage1)
+                df_stage1 = stage1_pipeline_14(df_stage1)
                 blank_cells = identify_blank_cells(df_stage1)
 
                 # Store in session state
@@ -308,7 +310,7 @@ if st.session_state.stage == "eplan":
                 all_blank_row_indices = sorted(list(all_blank_row_indices))
                 st.session_state["all_blank_row_indices"] = all_blank_row_indices
                 df_with_blanks = full_df.loc[all_blank_row_indices].copy()
-                df_with_blanks = stage1_pipeline_13(df_with_blanks)
+                df_with_blanks = stage1_pipeline_14(df_with_blanks)
 
                 # Friendly column headers
                 column_config = {}
