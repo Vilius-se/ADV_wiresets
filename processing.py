@@ -429,20 +429,6 @@ def parse_component_functions(df_f):
 # ==========================================================
 def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> pd.DataFrame:
     """
-    Bendras paskirstymo grandinių algoritmas.
-
-    config pagrindiniai laukai:
-      wirenos                – apdorojimo tvarka;
-      terminal_map           – Wireno -> tikslus terminalas arba terminalo komponentas;
-      default_function       – Wireno -> Line-Function;
-      main_line_name         – MAIN ir maitinimo kelio skerspjūvis;
-      daisy_line_name        – vartotojų daisy skerspjūvis;
-      source_modes           – Wireno -> source parinkimo būdas;
-      paired_main            – pvz. 0VDC turi naudoti 24VDC komponentą;
-      direct_terminal_main   – MAIN yra tiesioginis terminalo kaimynas;
-      relay_supply_groups    – 11->14, 21->24... puslapio laidų taisymas;
-      downstream_wirenos     – grupės, pagal kurias vertinama pagrindinė šaka.
-    """
     import re
     from collections import defaultdict
 
@@ -684,12 +670,85 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
 
         return score
 
+
+    def find_wireno_origin(wireno, nodes, rows):
+        """
+        Dabartinio Wireno šakoje randa pirmą komponentą nuo terminalo,
+        kurio kitas kontaktas turi kitą Wireno.
+
+        Pvz.:
+            MT/L3 arba 230VL2
+                    ↓
+                  -F903
+                    ↓
+                 F903/L3
+
+        Komponento pavadinimas nėra hardcodintas.
+        """
+        best = None
+
+        for position, symbol in enumerate(nodes[1:], start=1):
+            component = component_name(symbol)
+
+            if not component:
+                continue
+
+            foreign_wirenos = set()
+
+            for _, row in df.iterrows():
+                row_wireno = clean(row.get("Wireno", ""))
+
+                if not row_wireno or row_wireno == wireno:
+                    continue
+
+                name = clean(row.get("Name", ""))
+                name_1 = clean(row.get("Name.1", ""))
+
+                if (
+                    component_name(name) == component
+                    or component_name(name_1) == component
+                ):
+                    foreign_wirenos.add(row_wireno)
+
+            if not foreign_wirenos:
+                continue
+
+            has_named_supply = any(
+                not page_wire_pattern.fullmatch(other_wireno)
+                for other_wireno in foreign_wirenos
+            )
+
+            candidate = {
+                "strength": 2 if has_named_supply else 1,
+                "distance": position,
+                "nodes": nodes[:position + 1],
+                "rows": rows[:position],
+                "symbol": symbol,
+            }
+
+            if best is None:
+                best = candidate
+                continue
+
+            if candidate["strength"] > best["strength"]:
+                best = candidate
+                continue
+
+            if (
+                candidate["strength"] == best["strength"]
+                and candidate["distance"] < best["distance"]
+            ):
+                best = candidate
+
+        return best
+
     def select_source_branch(wireno):
         terminal = resolve_terminal(wireno)
         graph = graphs[wireno]
 
         if not terminal:
             return [], [], ""
+
         mode = source_modes.get(wireno, "shortest")
 
         candidates = []
@@ -698,6 +757,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
         for neighbour, _ in graph.get(terminal, []):
             if neighbour in seen:
                 continue
+
             seen.add(neighbour)
 
             nodes, rows = branch_from_terminal(
@@ -715,13 +775,40 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
                     page_connection_count(neighbour),
                     branch_length,
                 )
+
+            elif mode == "wireno_origin":
+                origin = find_wireno_origin(
+                    wireno,
+                    nodes,
+                    rows,
+                )
+
+                if origin:
+                    nodes = origin["nodes"]
+                    rows = origin["rows"]
+                    endpoint = origin["symbol"]
+
+                    score = (
+                        origin["strength"],
+                        -origin["distance"],
+                        -branch_length,
+                    )
+                else:
+                    score = (
+                        0,
+                        page_connection_count(neighbour),
+                        -branch_length,
+                    )
+
             elif mode == "shortest":
                 score = (
                     page_connection_count(neighbour),
                     -branch_length,
                 )
+
             elif mode == "direct":
                 score = (-branch_length,)
+
             else:
                 score = (-branch_length,)
 
@@ -741,6 +828,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
         )
 
         selected = candidates[0]
+
         return (
             selected["nodes"],
             selected["rows"],
@@ -851,6 +939,31 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
             df.at[index, "Line-Name"] = main_line_name
             df.at[index, "DaisyNo"] = "0"
 
+        # 230 VAC MAIN kelio tarpinės jungtys.
+        # Jei MAIN šaltinio komponentas turi jungčių su puslapio laidais
+        # 90:xx / 91:xx, jos taip pat laikomos MAIN ir gauna 1,5 mm².
+        if source_modes.get(wireno) == "wireno_origin":
+            source_component = component_name(main_source)
+
+            for index, row in df.iterrows():
+                row_wireno = clean(row.get("Wireno", ""))
+
+                if not page_wire_pattern.fullmatch(row_wireno):
+                    continue
+
+                name = clean(row.get("Name", ""))
+                name_1 = clean(row.get("Name.1", ""))
+
+                if (
+                    component_name(name) == source_component
+                    or component_name(name_1) == source_component
+                ):
+                    df.at[index, "Line-Name"] = main_line_name
+                    df.at[index, "DaisyNo"] = "0"
+
+                    main_path_symbols.add(name)
+                    main_path_symbols.add(name_1)
+        
         # Tik P11 DC konfigūracijoje aktyvi 11->14, 21->24... taisyklė.
         if wireno in relay_supply_groups:
             relay_component, relay_pin = split_endpoint(main_source)
@@ -1182,10 +1295,10 @@ def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         # Prie realaus X0100/X0101 kontakto trumpa šaka laikoma MAIN,
         # ilga šaka – vartotojų daisy.
         "source_modes": {
-            "F903/L3": "shortest",
-            "F903/N": "shortest",
-            "230VL": "shortest",
-            "230VN": "shortest",
+            "F903/L3": "wireno_origin",
+            "F903/N": "wireno_origin",
+            "230VL": "wireno_origin",
+            "230VN": "wireno_origin",
         },
 
         "paired_main": {},
