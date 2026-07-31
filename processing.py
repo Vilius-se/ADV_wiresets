@@ -422,28 +422,29 @@ def parse_component_functions(df_f):
     return results
 
 
-def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
+# ==========================================================
+# PIPELINE 10 – BENDRAS PASKIRSTYMO GRANDINIŲ BRANDUOLYS
+# Ši funkcija tiesiogiai app.py nekviečiama.
+# Ją kviečia P11 (24 VDC) ir P12 (230 VAC).
+# ==========================================================
+def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> pd.DataFrame:
     """
-    Pipeline 10 – universalus 24 VDC / 0 VDC paskirstymas.
+    Bendras paskirstymo grandinių algoritmas.
 
-    Logika:
-    - apdorojamos grupės: 0VDC, 24VDC, 24VDC1, 24VDC2 ir 24VDC3,
-      jeigu jos yra faile;
-    - kiekvienai grupei pirmiausia randama tikroji maitinimo šaka,
-      prasidedanti nuo atitinkamo -X0102 terminalo;
-    - 24VDC atveju iš kelių šakų pasirenkama ta, kuri per komponentų
-      topologiją maitina 24VDC1 / 24VDC2 / 24VDC3;
-    - 0VDC atveju pasirenkama trumpa šaltinio šaka, o ne ilga vartotojų
-      daisy grandinė;
-    - jeigu grupės terminalas tiesiogiai prijungtas prie saugiklio išėjimo
-      (:2, :4 ir t. t.), MAIN tašku tampa to saugiklio įėjimas (:1, :3...);
-    - sugeneruota *_MAIN eilutė yra 1,5 mm², DaisyNo 0;
-    - likusi pasirinktos maitinimo šakos dalis yra 1,5 mm², DaisyNo 0;
-    - MAIN panaudotas pajungimo taškas pašalinamas iš senos eilutės;
-    - vartotojų daisy grandinės generuojamos 0,75 mm².
+    config pagrindiniai laukai:
+      wirenos                – apdorojimo tvarka;
+      terminal_map           – Wireno -> paskirstymo terminalas;
+      default_function       – Wireno -> Line-Function;
+      main_line_name         – MAIN ir maitinimo kelio skerspjūvis;
+      daisy_line_name        – vartotojų daisy skerspjūvis;
+      source_modes           – Wireno -> source parinkimo būdas;
+      paired_main            – pvz. 0VDC turi naudoti 24VDC komponentą;
+      direct_terminal_main   – MAIN yra tiesioginis terminalo kaimynas;
+      relay_supply_groups    – 11->14, 21->24... puslapio laidų taisymas;
+      downstream_wirenos     – grupės, pagal kurias vertinama pagrindinė šaka.
     """
     import re
-    from collections import defaultdict, deque
+    from collections import defaultdict
 
     required_columns = {"Name", "Name.1", "Wireno"}
     if not required_columns.issubset(df.columns):
@@ -452,10 +453,10 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     df = df.copy().fillna("")
 
     for column in df.columns:
-        df[column] = df[column].astype(str)
-        df[column] = df[column].replace(
-            ["nan", "None", "none", "NULL", "null"],
-            "",
+        df[column] = (
+            df[column]
+            .astype(str)
+            .replace(["nan", "None", "none", "NULL", "null"], "")
         )
 
     if "DaisyNo" not in df.columns:
@@ -463,37 +464,27 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
     base_columns = list(df.columns)
 
-    dc_wirenos = (
-        "24VDC",
-        "0VDC",
-        "24VDC1",
-        "24VDC2",
-        "24VDC3",
+    wirenos = tuple(config["wirenos"])
+    terminal_map = dict(config["terminal_map"])
+    default_function = dict(config["default_function"])
+
+    main_line_name = str(config.get("main_line_name", "1,5"))
+    daisy_line_name = str(config.get("daisy_line_name", "0,75"))
+
+    source_modes = dict(config.get("source_modes", {}))
+    paired_main = dict(config.get("paired_main", {}))
+    direct_terminal_main = set(config.get("direct_terminal_main", set()))
+    relay_supply_groups = set(config.get("relay_supply_groups", set()))
+    downstream_wirenos = set(config.get("downstream_wirenos", set()))
+
+    page_wire_pattern = re.compile(
+        config.get("page_wire_pattern", r"^(?:90|91):\d+$"),
+        re.IGNORECASE,
     )
-
-    terminal_map = {
-        "0VDC": "-X0102:0VDC",
-        "24VDC": "-X0102:24VDC",
-        "24VDC1": "-X0102:24VDC1",
-        "24VDC2": "-X0102:24VDC2",
-        "24VDC3": "-X0102:24VDC3",
-    }
-
-    default_function = {
-        "0VDC": "DBU/WH",
-        "24VDC": "DBU",
-        "24VDC1": "DBU",
-        "24VDC2": "DBU",
-        "24VDC3": "DBU",
-    }
-
-    page_wire_pattern = re.compile(r"^(?:90|91):\d+$", re.IGNORECASE)
 
     def clean(value):
         value = str(value).strip()
-        if value.lower() in {"nan", "none", "null"}:
-            return ""
-        return value
+        return "" if value.lower() in {"nan", "none", "null"} else value
 
     def split_endpoint(endpoint):
         endpoint = clean(endpoint)
@@ -505,48 +496,12 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         component, _ = split_endpoint(endpoint)
         return component
 
-    def component_type(endpoint):
-        component = component_name(endpoint)
-        match = re.search(r"-([A-Z]+)", component, re.IGNORECASE)
-        return match.group(1).upper() if match else ""
-
-    def is_fuse(endpoint):
-        return component_type(endpoint) == "F"
-
-    def paired_fuse_input(endpoint, all_symbols):
-        """
-        Pvz.:
-          -F903.1:2 -> -F903.1:1
-          -F904:2   -> -F904:1
-          -Fxxx:4   -> -Fxxx:3
-
-        Kryžminama tik per saugiklį. Per reles ar kitus komponentus
-        automatiškai neinama.
-        """
-        if not is_fuse(endpoint):
-            return ""
-
-        component, pin = split_endpoint(endpoint)
-        if not pin.isdigit():
-            return ""
-
-        number = int(pin)
-
-        if number % 2 != 0:
-            return ""
-
-        input_endpoint = f"{component}:{number - 1}"
-        return input_endpoint if input_endpoint in all_symbols else ""
-
     def normalized_pair(name, name_1):
         return tuple(sorted((clean(name), clean(name_1))))
 
     def make_empty_row():
         return {column: "" for column in base_columns}
 
-    # ---------------------------------------------------------------
-    # Visų simbolių ir originalių DC metaduomenų surinkimas.
-    # ---------------------------------------------------------------
     all_symbols = {
         clean(value)
         for column in ("Name", "Name.1")
@@ -554,38 +509,33 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         if clean(value)
     }
 
+    # Originalių metaduomenų žemėlapis.
     symbol_meta = defaultdict(dict)
-
     for _, row in df.iterrows():
         wireno = clean(row.get("Wireno", ""))
-        if wireno not in dc_wirenos:
+        if wireno not in wirenos:
             continue
 
         for side in ("Name", "Name.1"):
             symbol = clean(row.get(side, ""))
-            if not symbol:
-                continue
-
-            symbol_meta[wireno][symbol] = {
-                "Line-Name": clean(row.get("Line-Name", "")),
-                "Line-Function": clean(row.get("Line-Function", "")),
-            }
+            if symbol:
+                symbol_meta[wireno][symbol] = {
+                    "Line-Name": clean(row.get("Line-Name", "")),
+                    "Line-Function": clean(row.get("Line-Function", "")),
+                }
 
     def get_row_meta(wireno, symbol):
         return symbol_meta.get(wireno, {}).get(symbol, {})
 
-    # ---------------------------------------------------------------
-    # Atskiras grafas kiekvienam DC Wireno.
-    # Jis neleidžia paieškai netyčia nueiti į kitą DC grupę.
-    # ---------------------------------------------------------------
-    dc_graphs = {
+    # Atskiras grafas kiekvienam Wireno.
+    graphs = {
         wireno: defaultdict(list)
-        for wireno in dc_wirenos
+        for wireno in wirenos
     }
 
     for index, row in df.iterrows():
         wireno = clean(row.get("Wireno", ""))
-        if wireno not in dc_graphs:
+        if wireno not in graphs:
             continue
 
         name = clean(row.get("Name", ""))
@@ -594,27 +544,23 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         if not name or not name_1 or name == name_1:
             continue
 
-        dc_graphs[wireno][name].append((name_1, index))
-        dc_graphs[wireno][name_1].append((name, index))
+        graphs[wireno][name].append((name_1, index))
+        graphs[wireno][name_1].append((name, index))
 
     def branch_from_terminal(wireno, terminal, first_neighbour):
         """
-        Surenka vieną konkrečią šaką nuo X0102 terminalo.
-        Jei šaka šakojasi, pasirenkamas ilgiausias kelias iki lapo.
+        Surenka vieną šaką nuo paskirstymo terminalo.
+        Jei šaka šakojasi, paimamas ilgiausias kelias iki lapo.
         """
-        graph = dc_graphs[wireno]
+        graph = graphs[wireno]
 
         best_nodes = [terminal, first_neighbour]
         best_rows = []
 
-        first_row = None
         for neighbour, row_index in graph.get(terminal, []):
             if neighbour == first_neighbour:
-                first_row = row_index
+                best_rows = [row_index]
                 break
-
-        if first_row is not None:
-            best_rows = [first_row]
 
         stack = [
             (
@@ -653,16 +599,12 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         return best_nodes, best_rows
 
     def page_connection_count(endpoint):
-        """
-        Kiek 90:xx / 91:xx realių laidų turi šio endpointo komponentas.
-        Naudojama tik 24VDC šaltinio šakai atpažinti.
-        """
         component = component_name(endpoint)
         count = 0
 
         for _, row in df.iterrows():
-            wireno = clean(row.get("Wireno", ""))
-            if not page_wire_pattern.fullmatch(wireno):
+            row_wireno = clean(row.get("Wireno", ""))
+            if not page_wire_pattern.fullmatch(row_wireno):
                 continue
 
             name = clean(row.get("Name", ""))
@@ -677,18 +619,11 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         return count
 
     def downstream_group_score(endpoint):
-        """
-        Papildomas 24VDC šakos balas.
-
-        Jei šakos komponentas taip pat dalyvauja 24VDC1/2/3 arba
-        90/91 paskirstyme, tikėtina, kad tai yra maitinimo šaka,
-        o ne paprastas vartotojas.
-        """
         component = component_name(endpoint)
         score = 0
 
         for _, row in df.iterrows():
-            wireno = clean(row.get("Wireno", ""))
+            row_wireno = clean(row.get("Wireno", ""))
             name = clean(row.get("Name", ""))
             name_1 = clean(row.get("Name.1", ""))
 
@@ -698,18 +633,19 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
             ):
                 continue
 
-            if wireno in {"24VDC1", "24VDC2", "24VDC3"}:
+            if row_wireno in downstream_wirenos:
                 score += 10
-            elif page_wire_pattern.fullmatch(wireno):
+            elif page_wire_pattern.fullmatch(row_wireno):
                 score += 3
 
         return score
 
     def select_source_branch(wireno):
         terminal = terminal_map[wireno]
-        graph = dc_graphs[wireno]
+        graph = graphs[wireno]
+        mode = source_modes.get(wireno, "shortest")
 
-        neighbours = []
+        candidates = []
         seen = set()
 
         for neighbour, _ in graph.get(terminal, []):
@@ -726,56 +662,44 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
             endpoint = nodes[-1]
             branch_length = len(rows)
 
-            if wireno == "24VDC":
-                # Pirmiausia pasirenkama šaka, kuri maitina tolimesnį
-                # 24VDC paskirstymą. Tik tada vertinamas ilgis.
+            if mode == "dc_primary":
                 score = (
                     downstream_group_score(neighbour),
                     page_connection_count(neighbour),
                     branch_length,
                 )
-
-            elif wireno == "0VDC":
-                # 0VDC šaltinis paprastai yra trumpa atskira šaka.
-                # Ilga šaka yra vartotojų daisy chain.
+            elif mode == "shortest":
                 score = (
                     page_connection_count(neighbour),
                     -branch_length,
                 )
-
+            elif mode == "direct":
+                score = (-branch_length,)
             else:
-                # 24VDC1/2/3 paprastai turi vieną tiesioginę šaką.
-                score = (
-                    -branch_length,
-                )
+                score = (-branch_length,)
 
-            neighbours.append(
-                {
-                    "score": score,
-                    "nodes": nodes,
-                    "rows": rows,
-                    "endpoint": endpoint,
-                }
-            )
+            candidates.append({
+                "score": score,
+                "nodes": nodes,
+                "rows": rows,
+                "endpoint": endpoint,
+            })
 
-        if not neighbours:
+        if not candidates:
             return [], [], ""
 
-        neighbours.sort(
+        candidates.sort(
             key=lambda item: item["score"],
             reverse=True,
         )
 
-        selected = neighbours[0]
+        selected = candidates[0]
         return (
             selected["nodes"],
             selected["rows"],
             selected["endpoint"],
         )
 
-    # ---------------------------------------------------------------
-    # Sugeneruotų eilučių kaupimas.
-    # ---------------------------------------------------------------
     generated_rows = []
     generated_pairs = set()
 
@@ -791,7 +715,6 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
             return
 
         pair = normalized_pair(name, name_1)
-
         if pair in generated_pairs:
             return
 
@@ -817,14 +740,12 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     main_path_symbols = set()
     rows_to_remove = set()
 
-    # 24VDC MAIN šaltinio komponentas vėliau naudojamas teisingam
-    # 0VDC grįžimo kontaktui parinkti.
-    main_24v_component = ""
+    # Įsimenami jau apdorotų MAIN komponentai.
+    main_components = {}
 
-    # ---------------------------------------------------------------
-    # MAIN eilučių generavimas.
-    # ---------------------------------------------------------------
-    for wireno in dc_wirenos:
+    # BŪTINA: ciklas eina tiksliai config["wirenos"] tvarka.
+    # P11 konfigūracijoje 24VDC yra prieš 0VDC.
+    for wireno in wirenos:
         terminal = terminal_map[wireno]
 
         if (
@@ -838,83 +759,58 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         if not endpoint:
             continue
 
-        # 0VDC atveju pirmiausia ieškome tiesioginio X0102 kaimyno,
-        # priklausančio tam pačiam komponentui kaip 24VDC_MAIN šaltinis.
-        #
-        # Pvz.:
-        #   24VDC_MAIN = -C903:10
-        #   0VDC_MAIN  = -C903:11
-        #
-        # Taip -K918:A2 (relės ritės grįžimas) nebebus palaikytas
-        # pagrindiniu 0VDC šaltiniu.
-        if wireno == "0VDC" and main_24v_component:
-            terminal = terminal_map["0VDC"]
+        main_source = endpoint
+
+        # Pvz. 0VDC ieško tiesioginio kaimyno iš to paties
+        # komponento, kuris buvo rastas apdorojant 24VDC.
+        paired_with = paired_main.get(wireno)
+        preferred_component = main_components.get(paired_with, "")
+
+        if preferred_component:
             matching_neighbour = ""
 
-            for neighbour, _ in dc_graphs["0VDC"].get(terminal, []):
-                if component_name(neighbour) == main_24v_component:
+            for neighbour, _ in graphs[wireno].get(terminal, []):
+                if component_name(neighbour) == preferred_component:
                     matching_neighbour = neighbour
                     break
 
             if matching_neighbour:
                 path_nodes, path_rows = branch_from_terminal(
-                    "0VDC",
+                    wireno,
                     terminal,
                     matching_neighbour,
                 )
-                endpoint = path_nodes[-1] if path_nodes else matching_neighbour
                 main_source = matching_neighbour
             elif len(path_nodes) >= 2:
                 main_source = path_nodes[1]
-            else:
-                main_source = endpoint
 
-        elif wireno == "0VDC" and len(path_nodes) >= 2:
+        elif source_modes.get(wireno) == "shortest" and len(path_nodes) >= 2:
             main_source = path_nodes[1]
 
-        else:
-            main_source = endpoint
-
-        # 24VDC MAIN šaltinio komponentą įsimename prieš apdorojant 0VDC.
-        if wireno == "24VDC":
-            main_24v_component = component_name(main_source)
-
-        # 24VDC1/2/3 MAIN taškas turi būti tas kontaktas,
-        # kuris tiesiogiai jungiasi į atitinkamą -X0102 terminalą.
-        #
-        # Pvz.:
-        #   -X0102:24VDC1 -> -F903.1:2
-        #
-        # MAIN turi būti:
-        #   -F903.1:2 -> -X0102:24VDC1_MAIN
-        #
-        # Todėl į saugiklio įėjimą (:1) nepereinama.
-        if wireno in {"24VDC1", "24VDC2", "24VDC3"} and len(path_nodes) >= 2:
+        # Pvz. 24VDC1/2/3 MAIN turi būti tiesioginis X0102 kaimynas.
+        if wireno in direct_terminal_main and len(path_nodes) >= 2:
             main_source = path_nodes[1]
+
+        main_components[wireno] = component_name(main_source)
 
         main_source_symbols.add(main_source)
         main_path_symbols.update(path_nodes)
         main_path_symbols.add(main_source)
 
-        # Pasirinktos maitinimo šakos eilutės yra 1,5 mm².
+        # MAIN maitinimo kelias.
         for index in path_rows:
             if index not in df.index:
                 continue
-
-            df.at[index, "Line-Name"] = "1,5"
+            df.at[index, "Line-Name"] = main_line_name
             df.at[index, "DaisyNo"] = "0"
 
-        # 24VDC1/2/3 relės kontakto maitinimo pusė yra 90/91 puslapio laidas.
-        # Pvz. -K918:11 -> porinis kontaktas -K918:14.
-        # Todėl eilutė -K918:14 -> -F904:2 taip pat turi būti 1,5 mm².
-        if wireno in {"24VDC1", "24VDC2", "24VDC3"}:
+        # Tik P11 DC konfigūracijoje aktyvi 11->14, 21->24... taisyklė.
+        if wireno in relay_supply_groups:
             relay_component, relay_pin = split_endpoint(main_source)
             supply_pin = ""
 
             if relay_pin.isdigit():
                 pin_number = int(relay_pin)
-
-                # IEC kontaktų poros: 11->14, 21->24, 31->34, 41->44...
                 if pin_number % 10 == 1:
                     supply_pin = str(pin_number + 3)
 
@@ -923,18 +819,14 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
                 for index, row in df.iterrows():
                     row_wireno = clean(row.get("Wireno", ""))
-
                     if not page_wire_pattern.fullmatch(row_wireno):
                         continue
 
                     name = clean(row.get("Name", ""))
                     name_1 = clean(row.get("Name.1", ""))
 
-                    if (
-                        name == relay_supply_endpoint
-                        or name_1 == relay_supply_endpoint
-                    ):
-                        df.at[index, "Line-Name"] = "1,5"
+                    if relay_supply_endpoint in (name, name_1):
+                        df.at[index, "Line-Name"] = main_line_name
                         df.at[index, "DaisyNo"] = "0"
                         main_path_symbols.add(relay_supply_endpoint)
 
@@ -943,19 +835,19 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
             f"{terminal}_MAIN",
             wireno,
             0,
-            "1,5",
+            main_line_name,
             default_function[wireno],
         )
 
     main_path_symbols.discard("")
 
-    # MAIN panaudotas kontaktas negali likti senoje DC arba 90/91 eilutėje.
+    # MAIN naudota sena eilutė pašalinama.
     for index, row in df.iterrows():
-        wireno = clean(row.get("Wireno", ""))
+        row_wireno = clean(row.get("Wireno", ""))
 
         if (
-            wireno not in dc_wirenos
-            and not page_wire_pattern.fullmatch(wireno)
+            row_wireno not in wirenos
+            and not page_wire_pattern.fullmatch(row_wireno)
         ):
             continue
 
@@ -968,9 +860,6 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         ):
             rows_to_remove.add(index)
 
-    # ---------------------------------------------------------------
-    # Vartotojų daisy grandinės.
-    # ---------------------------------------------------------------
     def group_matches(symbols, functions, excluded_symbols):
         matches = set()
 
@@ -980,7 +869,6 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
             for function_symbol in functions:
                 function_symbol = clean(function_symbol)
-
                 if not function_symbol:
                     continue
 
@@ -993,14 +881,14 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
         return sorted(matches)
 
-    for wireno in dc_wirenos:
+    # Vartotojų daisy grandinės.
+    for wireno in wirenos:
         section = df[df["Wireno"] == wireno]
 
         if section.empty:
             continue
 
         terminal = terminal_map[wireno]
-
         consumer_section = section[
             ~section.index.isin(rows_to_remove)
         ]
@@ -1049,7 +937,7 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
                 terminal,
                 wireno,
                 group,
-                "0,75",
+                daisy_line_name,
                 first_meta.get("Line-Function", "")
                 or default_function[wireno],
             )
@@ -1062,14 +950,11 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
                     name_1,
                     wireno,
                     group,
-                    "0,75",
+                    daisy_line_name,
                     row_meta.get("Line-Function", "")
                     or default_function[wireno],
                 )
 
-    # ---------------------------------------------------------------
-    # Pašalinimas ir naujų eilučių pridėjimas.
-    # ---------------------------------------------------------------
     df = df.drop(
         index=list(rows_to_remove),
         errors="ignore",
@@ -1085,9 +970,7 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
             ignore_index=True,
         )
 
-    # ---------------------------------------------------------------
     # Galutinis dublių sutvarkymas.
-    # ---------------------------------------------------------------
     df = df[
         df["Name"].astype(str)
         != df["Name.1"].astype(str)
@@ -1095,11 +978,10 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
 
     df["DaisyNo"] = df["DaisyNo"].astype(str)
 
-    df["_p10_priority"] = (
+    df["_distribution_priority"] = (
         df["DaisyNo"].eq("0").astype(int)
     )
-
-    df["_p10_pair"] = df.apply(
+    df["_distribution_pair"] = df.apply(
         lambda row: normalized_pair(
             row.get("Name", ""),
             row.get("Name.1", ""),
@@ -1108,20 +990,163 @@ def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     )
 
     df = df.sort_values(
-        "_p10_priority",
+        "_distribution_priority",
         ascending=False,
     )
 
     df = df.drop_duplicates(
-        subset=["_p10_pair"],
+        subset=["_distribution_pair"],
         keep="first",
     )
 
     df = df.drop(
-        columns=["_p10_priority", "_p10_pair"],
+        columns=[
+            "_distribution_priority",
+            "_distribution_pair",
+        ],
     )
 
     return df.reset_index(drop=True)
+
+
+# ==========================================================
+# PIPELINE 11 – 24 VDC PASKIRSTYMAS
+# ==========================================================
+def stage1_pipeline_11(df: pd.DataFrame,group_symbols: dict,) -> pd.DataFrame:
+    """
+    24 VDC / 0 VDC paskirstymas per bendrą P10 branduolį.
+    """
+
+    dc_config = {
+        # Tvarka būtina: 24VDC turi būti apdorojamas prieš 0VDC.
+        "wirenos": (
+            "24VDC",
+            "0VDC",
+            "24VDC1",
+            "24VDC2",
+            "24VDC3",
+        ),
+
+        "terminal_map": {
+            "24VDC": "-X0102:24VDC",
+            "0VDC": "-X0102:0VDC",
+            "24VDC1": "-X0102:24VDC1",
+            "24VDC2": "-X0102:24VDC2",
+            "24VDC3": "-X0102:24VDC3",
+        },
+
+        "default_function": {
+            "24VDC": "DBU",
+            "0VDC": "DBU/WH",
+            "24VDC1": "DBU",
+            "24VDC2": "DBU",
+            "24VDC3": "DBU",
+        },
+
+        "main_line_name": "1,5",
+        "daisy_line_name": "0,75",
+
+        "source_modes": {
+            "24VDC": "dc_primary",
+            "0VDC": "shortest",
+            "24VDC1": "direct",
+            "24VDC2": "direct",
+            "24VDC3": "direct",
+        },
+
+        # 0VDC MAIN ieškomas tame pačiame komponente kaip 24VDC MAIN.
+        "paired_main": {
+            "0VDC": "24VDC",
+        },
+
+        "direct_terminal_main": {
+            "24VDC1",
+            "24VDC2",
+            "24VDC3",
+        },
+
+        "relay_supply_groups": {
+            "24VDC1",
+            "24VDC2",
+            "24VDC3",
+        },
+
+        "downstream_wirenos": {
+            "24VDC1",
+            "24VDC2",
+            "24VDC3",
+        },
+    }
+
+    return stage1_pipeline_10(
+        df=df,
+        group_symbols=group_symbols,
+        config=dc_config,
+    )
+
+
+# ==========================================================
+# PIPELINE 12 – 230 VAC PASKIRSTYMAS
+# ==========================================================
+def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict,) -> pd.DataFrame:
+    """
+    X0100 ir X0101 230 VAC paskirstymas per bendrą P10 branduolį.
+
+    X0100:
+      F903/L3
+      F903/N
+
+    X0101:
+      230VL
+      230VN
+    """
+
+    ac_config = {
+        "wirenos": (
+            "F903/L3",
+            "F903/N",
+            "230VL",
+            "230VN",
+        ),
+
+        "terminal_map": {
+            "F903/L3": "-X0100:F903/L3",
+            "F903/N": "-X0100:F903/N",
+            "230VL": "-X0101:230VL",
+            "230VN": "-X0101:230VN",
+        },
+
+        "default_function": {
+            "F903/L3": "BK",
+            "F903/N": "BU",
+            "230VL": "RD",
+            "230VN": "RD/WH",
+        },
+
+        "main_line_name": "1,5",
+        "daisy_line_name": "1,5",
+
+        # Prie X0100/X0101 trumpa šaka laikoma MAIN,
+        # ilga šaka – vartotojų daisy.
+        "source_modes": {
+            "F903/L3": "shortest",
+            "F903/N": "shortest",
+            "230VL": "shortest",
+            "230VN": "shortest",
+        },
+
+        "paired_main": {},
+        "direct_terminal_main": set(),
+        "relay_supply_groups": set(),
+        "downstream_wirenos": set(),
+    }
+
+    return stage1_pipeline_10(
+        df=df,
+        group_symbols=group_symbols,
+        config=ac_config,
+    )
+    
 
 def stage1_pipeline_13(df: pd.DataFrame) -> pd.DataFrame:
     """
