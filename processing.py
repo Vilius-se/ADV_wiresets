@@ -787,7 +787,7 @@ def stage1_pipeline_11(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def stage1_pipeline_12(df: pd.DataFrame) -> pd.DataFrame:
+def stage1_pipeline_13(df: pd.DataFrame) -> pd.DataFrame:
     """
     Prepare dataframe for manual editing by:
     1. Replacing cells containing 'Error' with empty strings
