@@ -27,7 +27,6 @@ from processing import (
     stage1_pipeline_16,
     stage1_pipeline_17,
     stage1_pipeline_18,
-    stage1_pipeline_19,
     stage1_pipeline_20,
     stage1_pipeline_21,
     stage1_pipeline_22,
@@ -199,7 +198,6 @@ if st.session_state.stage == "eplan":
                 df_stage1 = stage1_pipeline_15(df_stage1)
                 df_stage1 = stage1_pipeline_17(df_stage1)
                 df_stage1 = stage1_pipeline_18(df_stage1)
-                df_stage1 = stage1_pipeline_19(df_stage1)
                 df_stage1 = stage1_pipeline_20(df_stage1)
                 df_stage1 = stage1_pipeline_21(df_stage1)
                 df_stage1 = stage1_pipeline_22(df_stage1)
