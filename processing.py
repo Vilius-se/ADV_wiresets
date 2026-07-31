@@ -748,13 +748,9 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
                 best = candidate
                 continue
 
-            # Jei keli kandidatai vienodo stiprumo, renkamės toliau nuo
-            # paskirstymo terminalo esantį komponentą. Taip MAIN kelias
-            # nenutrūksta ties tarpiniu kontaktoriumi / rele, o tęsiasi
-            # iki tikrosios grandinės pradžios, pvz. saugiklio.
             if (
                 candidate["strength"] == best["strength"]
-                and candidate["distance"] > best["distance"]
+                and candidate["distance"] < best["distance"]
             ):
                 best = candidate
 
@@ -801,22 +797,31 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
                     rows,
                 )
 
-                if origin:
-                    nodes = origin["nodes"]
-                    rows = origin["rows"]
-                    endpoint = origin["symbol"]
+                # 230 VAC MAIN šaltinis turi būti tiesioginis paskirstymo
+                # terminalo kaimynas. Jei tarp tiesioginių šakų yra saugiklis
+                # (-F...), jam teikiama pirmenybė prieš kontaktorių / relę.
+                # Taip nepažymima visa vartotojų RD grandinė kaip MAIN.
+                direct_is_fuse = component_name(neighbour).upper().startswith("-F")
 
+                if origin:
                     score = (
+                        1 if direct_is_fuse else 0,
                         origin["strength"],
-                        -origin["distance"],
+                        page_connection_count(neighbour),
                         -branch_length,
                     )
                 else:
                     score = (
+                        1 if direct_is_fuse else 0,
                         0,
                         page_connection_count(neighbour),
                         -branch_length,
                     )
+
+                # MAIN baigiasi ties tiesioginiu terminalo kaimynu.
+                nodes = nodes[:2]
+                rows = rows[:1]
+                endpoint = neighbour
 
             elif mode == "shortest":
                 score = (
