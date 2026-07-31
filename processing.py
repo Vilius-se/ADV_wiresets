@@ -433,7 +433,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
 
     config pagrindiniai laukai:
       wirenos                – apdorojimo tvarka;
-      terminal_map           – Wireno -> paskirstymo terminalas;
+      terminal_map           – Wireno -> tikslus terminalas arba terminalo komponentas;
       default_function       – Wireno -> Line-Function;
       main_line_name         – MAIN ir maitinimo kelio skerspjūvis;
       daisy_line_name        – vartotojų daisy skerspjūvis;
@@ -547,6 +547,50 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
         graphs[wireno][name].append((name_1, index))
         graphs[wireno][name_1].append((name, index))
 
+    def resolve_terminal(wireno):
+        """
+        Suranda realų paskirstymo terminalo kontaktą.
+
+        terminal_map gali turėti:
+        - tikslų simbolį, pvz. -X0102:24VDC;
+        - tik komponentą, pvz. -X0100 arba -X0101.
+
+        Kai pateiktas tik komponentas, kontaktas paimamas iš realių
+        to Wireno jungčių. Todėl F903/L3 gali būti prijungtas prie
+        -X0100:L3, o F903/N – prie -X0100:N.
+        """
+        terminal_hint = clean(terminal_map.get(wireno, ""))
+        if not terminal_hint:
+            return ""
+
+        graph = graphs.get(wireno, {})
+
+        # Jei konfigūracijoje pateiktas tikslus kontaktas ir jis yra faile.
+        if terminal_hint in graph:
+            return terminal_hint
+
+        # Jei pateiktas tik komponentas, randamas realus jo kontaktas.
+        candidates = [
+            symbol
+            for symbol in graph
+            if component_name(symbol) == terminal_hint
+        ]
+
+        if not candidates:
+            return ""
+
+        # Dažniausiai vienas paskirstymo kontaktas turi dvi jungtis:
+        # MAIN ir daisy. Todėl pirmiausia renkamės didžiausio laipsnio mazgą.
+        candidates.sort(
+            key=lambda symbol: (
+                len(graph.get(symbol, [])),
+                symbol,
+            ),
+            reverse=True,
+        )
+
+        return candidates[0]
+
     def branch_from_terminal(wireno, terminal, first_neighbour):
         """
         Surenka vieną šaką nuo paskirstymo terminalo.
@@ -641,8 +685,11 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
         return score
 
     def select_source_branch(wireno):
-        terminal = terminal_map[wireno]
+        terminal = resolve_terminal(wireno)
         graph = graphs[wireno]
+
+        if not terminal:
+            return [], [], ""
         mode = source_modes.get(wireno, "shortest")
 
         candidates = []
@@ -746,12 +793,12 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
     # BŪTINA: ciklas eina tiksliai config["wirenos"] tvarka.
     # P11 konfigūracijoje 24VDC yra prieš 0VDC.
     for wireno in wirenos:
-        terminal = terminal_map[wireno]
+        terminal = resolve_terminal(wireno)
 
-        if (
-            wireno not in existing_wirenos
-            and terminal not in all_symbols
-        ):
+        if not terminal:
+            continue
+
+        if wireno not in existing_wirenos:
             continue
 
         path_nodes, path_rows, endpoint = select_source_branch(wireno)
@@ -888,7 +935,10 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
         if section.empty:
             continue
 
-        terminal = terminal_map[wireno]
+        terminal = resolve_terminal(wireno)
+        if not terminal:
+            continue
+
         consumer_section = section[
             ~section.index.isin(rows_to_remove)
         ]
@@ -1012,7 +1062,10 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict,) -> 
 # ==========================================================
 # PIPELINE 11 – 24 VDC PASKIRSTYMAS
 # ==========================================================
-def stage1_pipeline_11(df: pd.DataFrame,group_symbols: dict,) -> pd.DataFrame:
+def stage1_pipeline_11(
+    df: pd.DataFrame,
+    group_symbols: dict,
+) -> pd.DataFrame:
     """
     24 VDC / 0 VDC paskirstymas per bendrą P10 branduolį.
     """
@@ -1088,7 +1141,10 @@ def stage1_pipeline_11(df: pd.DataFrame,group_symbols: dict,) -> pd.DataFrame:
 # ==========================================================
 # PIPELINE 12 – 230 VAC PASKIRSTYMAS
 # ==========================================================
-def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict,) -> pd.DataFrame:
+def stage1_pipeline_12(
+    df: pd.DataFrame,
+    group_symbols: dict,
+) -> pd.DataFrame:
     """
     X0100 ir X0101 230 VAC paskirstymas per bendrą P10 branduolį.
 
@@ -1110,10 +1166,13 @@ def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict,) -> pd.DataFrame:
         ),
 
         "terminal_map": {
-            "F903/L3": "-X0100:F903/L3",
-            "F903/N": "-X0100:F903/N",
-            "230VL": "-X0101:230VL",
-            "230VN": "-X0101:230VN",
+            # Čia nurodomas tik paskirstymo komponentas.
+            # Tikras kontaktas paimamas iš realios projekto schemos:
+            # pvz. -X0100:L3, -X0100:N, -X0101:230VL, -X0101:230VN.
+            "F903/L3": "-X0100",
+            "F903/N": "-X0100",
+            "230VL": "-X0101",
+            "230VN": "-X0101",
         },
 
         "default_function": {
@@ -1126,7 +1185,7 @@ def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict,) -> pd.DataFrame:
         "main_line_name": "1,5",
         "daisy_line_name": "1,5",
 
-        # Prie X0100/X0101 trumpa šaka laikoma MAIN,
+        # Prie realaus X0100/X0101 kontakto trumpa šaka laikoma MAIN,
         # ilga šaka – vartotojų daisy.
         "source_modes": {
             "F903/L3": "shortest",
