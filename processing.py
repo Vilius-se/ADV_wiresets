@@ -684,85 +684,12 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
 
         return score
 
-
-    def find_wireno_origin(wireno, nodes, rows):
-        """
-        Dabartinio Wireno šakoje randa pirmą komponentą nuo terminalo,
-        kurio kitas kontaktas turi kitą Wireno.
-
-        Pvz.:
-            MT/L3 arba 230VL2
-                    ↓
-                  -F903
-                    ↓
-                 F903/L3
-
-        Komponento pavadinimas nėra hardcodintas.
-        """
-        best = None
-
-        for position, symbol in enumerate(nodes[1:], start=1):
-            component = component_name(symbol)
-
-            if not component:
-                continue
-
-            foreign_wirenos = set()
-
-            for _, row in df.iterrows():
-                row_wireno = clean(row.get("Wireno", ""))
-
-                if not row_wireno or row_wireno == wireno:
-                    continue
-
-                name = clean(row.get("Name", ""))
-                name_1 = clean(row.get("Name.1", ""))
-
-                if (
-                    component_name(name) == component
-                    or component_name(name_1) == component
-                ):
-                    foreign_wirenos.add(row_wireno)
-
-            if not foreign_wirenos:
-                continue
-
-            has_named_supply = any(
-                not page_wire_pattern.fullmatch(other_wireno)
-                for other_wireno in foreign_wirenos
-            )
-
-            candidate = {
-                "strength": 2 if has_named_supply else 1,
-                "distance": position,
-                "nodes": nodes[:position + 1],
-                "rows": rows[:position],
-                "symbol": symbol,
-            }
-
-            if best is None:
-                best = candidate
-                continue
-
-            if candidate["strength"] > best["strength"]:
-                best = candidate
-                continue
-
-            if (
-                candidate["strength"] == best["strength"]
-                and candidate["distance"] < best["distance"]
-            ):
-                best = candidate
-
-        return best
-
     def select_source_branch(wireno):
         terminal = resolve_terminal(wireno)
         graph = graphs[wireno]
 
         if not terminal:
             return [], [], ""
-
         mode = source_modes.get(wireno, "shortest")
 
         candidates = []
@@ -771,7 +698,6 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
         for neighbour, _ in graph.get(terminal, []):
             if neighbour in seen:
                 continue
-
             seen.add(neighbour)
 
             nodes, rows = branch_from_terminal(
@@ -789,40 +715,13 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
                     page_connection_count(neighbour),
                     branch_length,
                 )
-
-            elif mode == "wireno_origin":
-                origin = find_wireno_origin(
-                    wireno,
-                    nodes,
-                    rows,
-                )
-
-                if origin:
-                    nodes = origin["nodes"]
-                    rows = origin["rows"]
-                    endpoint = origin["symbol"]
-
-                    score = (
-                        origin["strength"],
-                        -origin["distance"],
-                        -branch_length,
-                    )
-                else:
-                    score = (
-                        0,
-                        page_connection_count(neighbour),
-                        -branch_length,
-                    )
-
             elif mode == "shortest":
                 score = (
                     page_connection_count(neighbour),
                     -branch_length,
                 )
-
             elif mode == "direct":
                 score = (-branch_length,)
-
             else:
                 score = (-branch_length,)
 
@@ -842,7 +741,6 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
         )
 
         selected = candidates[0]
-
         return (
             selected["nodes"],
             selected["rows"],
