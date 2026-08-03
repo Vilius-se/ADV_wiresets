@@ -684,20 +684,84 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
 
         return score
 
+
+    def find_wireno_origin(wireno, nodes, rows):
+        """
+        Dabartinio Wireno šakoje randa pirmą komponentą nuo terminalo,
+        kurio kitas kontaktas turi kitą Wireno.
+
+        Komponento pavadinimas nėra hardcodintas.
+        """
+        best = None
+
+        for position, symbol in enumerate(nodes[1:], start=1):
+            component = component_name(symbol)
+
+            if not component:
+                continue
+
+            foreign_wirenos = set()
+
+            for _, row in df.iterrows():
+                row_wireno = clean(row.get("Wireno", ""))
+
+                if not row_wireno or row_wireno == wireno:
+                    continue
+
+                name = clean(row.get("Name", ""))
+                name_1 = clean(row.get("Name.1", ""))
+
+                if (
+                    component_name(name) == component
+                    or component_name(name_1) == component
+                ):
+                    foreign_wirenos.add(row_wireno)
+
+            if not foreign_wirenos:
+                continue
+
+            has_named_supply = any(
+                not page_wire_pattern.fullmatch(other_wireno)
+                for other_wireno in foreign_wirenos
+            )
+
+            candidate = {
+                "strength": 2 if has_named_supply else 1,
+                "distance": position,
+                "symbol": symbol,
+            }
+
+            if best is None:
+                best = candidate
+                continue
+
+            if candidate["strength"] > best["strength"]:
+                best = candidate
+                continue
+
+            if (
+                candidate["strength"] == best["strength"]
+                and candidate["distance"] < best["distance"]
+            ):
+                best = candidate
+
+        return best
+
     def select_source_branch(wireno):
         terminal = resolve_terminal(wireno)
         graph = graphs[wireno]
 
         if not terminal:
             return [], [], ""
-        mode = source_modes.get(wireno, "shortest")
 
+        mode = source_modes.get(wireno, "shortest")
         candidates = []
         seen = set()
 
         for neighbour, _ in graph.get(terminal, []):
             if neighbour in seen:
                 continue
+
             seen.add(neighbour)
 
             nodes, rows = branch_from_terminal(
@@ -710,18 +774,53 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
             branch_length = len(rows)
 
             if mode == "dc_primary":
+                # 24VDC atveju tiesioginė OUT+ šaka visada turi pirmenybę.
+                direct_is_out_plus = neighbour.upper().endswith(":OUT+")
+
                 score = (
+                    1 if direct_is_out_plus else 0,
                     downstream_group_score(neighbour),
                     page_connection_count(neighbour),
                     branch_length,
                 )
+
+                # Jei radome OUT+, MAIN baigiasi ties tuo tiesioginiu kaimynu.
+                if direct_is_out_plus:
+                    nodes = nodes[:2]
+                    rows = rows[:1]
+                    endpoint = neighbour
+
+            elif mode == "wireno_origin":
+                origin = find_wireno_origin(
+                    wireno,
+                    nodes,
+                    rows,
+                )
+
+                # 230 VAC MAIN turi būti tiesioginis paskirstymo terminalo
+                # kaimynas. Saugikliui teikiama pirmenybė prieš kitą aparatą.
+                direct_is_fuse = component_name(neighbour).upper().startswith("-F")
+
+                score = (
+                    1 if direct_is_fuse else 0,
+                    page_connection_count(neighbour),
+                    origin["strength"] if origin else 0,
+                    -branch_length,
+                )
+
+                nodes = nodes[:2]
+                rows = rows[:1]
+                endpoint = neighbour
+
             elif mode == "shortest":
                 score = (
                     page_connection_count(neighbour),
                     -branch_length,
                 )
+
             elif mode == "direct":
                 score = (-branch_length,)
+
             else:
                 score = (-branch_length,)
 
@@ -741,6 +840,7 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
         )
 
         selected = candidates[0]
+
         return (
             selected["nodes"],
             selected["rows"],
