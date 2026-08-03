@@ -774,21 +774,29 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
             branch_length = len(rows)
 
             if mode == "dc_primary":
-                # 24VDC atveju tiesioginė OUT+ šaka visada turi pirmenybę.
-                direct_is_out_plus = neighbour.upper().endswith(":OUT+")
+                # 24VDC šakoje ieškome OUT+ ne tik tiesioginiame X0102
+                # kaimyne, bet visame rastame kelyje.
+                out_plus_position = None
+
+                for position, node in enumerate(nodes[1:], start=1):
+                    if node.upper().endswith(":OUT+"):
+                        out_plus_position = position
+                        break
+
+                has_out_plus = out_plus_position is not None
 
                 score = (
-                    1 if direct_is_out_plus else 0,
+                    1 if has_out_plus else 0,
                     downstream_group_score(neighbour),
                     page_connection_count(neighbour),
                     branch_length,
                 )
 
-                # Jei radome OUT+, MAIN baigiasi ties tuo tiesioginiu kaimynu.
-                if direct_is_out_plus:
-                    nodes = nodes[:2]
-                    rows = rows[:1]
-                    endpoint = neighbour
+                # Jei OUT+ rastas, MAIN kelias baigiasi būtent ties juo.
+                if has_out_plus:
+                    nodes = nodes[:out_plus_position + 1]
+                    rows = rows[:out_plus_position]
+                    endpoint = nodes[-1]
 
             elif mode == "wireno_origin":
                 origin = find_wireno_origin(
