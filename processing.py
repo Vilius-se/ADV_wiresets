@@ -797,31 +797,22 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
                     rows,
                 )
 
-                # 230 VAC MAIN šaltinis turi būti tiesioginis paskirstymo
-                # terminalo kaimynas. Jei tarp tiesioginių šakų yra saugiklis
-                # (-F...), jam teikiama pirmenybė prieš kontaktorių / relę.
-                # Taip nepažymima visa vartotojų RD grandinė kaip MAIN.
-                direct_is_fuse = component_name(neighbour).upper().startswith("-F")
-
                 if origin:
+                    nodes = origin["nodes"]
+                    rows = origin["rows"]
+                    endpoint = origin["symbol"]
+
                     score = (
-                        1 if direct_is_fuse else 0,
-                        page_connection_count(neighbour),
                         origin["strength"],
+                        -origin["distance"],
                         -branch_length,
                     )
                 else:
                     score = (
-                        1 if direct_is_fuse else 0,
-                        page_connection_count(neighbour),
                         0,
+                        page_connection_count(neighbour),
                         -branch_length,
                     )
-
-                # MAIN baigiasi ties tiesioginiu terminalo kaimynu.
-                nodes = nodes[:2]
-                rows = rows[:1]
-                endpoint = neighbour
 
             elif mode == "shortest":
                 score = (
