@@ -1259,6 +1259,9 @@ def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
     X0101:
       230VL
       230VN
+
+    Po bendro P10 apdorojimo papildomai sutvarko 230 VAC MAIN
+    komponentų 90:xx / 91:xx maitinimo laidus į 1,5 mm².
     """
 
     ac_config = {
@@ -1270,9 +1273,6 @@ def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         ),
 
         "terminal_map": {
-            # Čia nurodomas tik paskirstymo komponentas.
-            # Tikras kontaktas paimamas iš realios projekto schemos:
-            # pvz. -X0100:L3, -X0100:N, -X0101:230VL, -X0101:230VN.
             "F903/L3": "-X0100",
             "F903/N": "-X0100",
             "230VL": "-X0101",
@@ -1287,10 +1287,8 @@ def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         },
 
         "main_line_name": "1,5",
-        "daisy_line_name": "1,5",
+        "daisy_line_name": "0,75",
 
-        # Prie realaus X0100/X0101 kontakto trumpa šaka laikoma MAIN,
-        # ilga šaka – vartotojų daisy.
         "source_modes": {
             "F903/L3": "wireno_origin",
             "F903/N": "wireno_origin",
@@ -1304,11 +1302,60 @@ def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         "downstream_wirenos": set(),
     }
 
-    return stage1_pipeline_10(
+    result = stage1_pipeline_10(
         df=df,
         group_symbols=group_symbols,
         config=ac_config,
     )
+
+    def clean(value):
+        value = str(value).strip()
+        return "" if value.lower() in {"nan", "none", "null"} else value
+
+    def component_name(endpoint):
+        endpoint = clean(endpoint)
+        if ":" not in endpoint:
+            return endpoint
+        return endpoint.rsplit(":", 1)[0]
+
+    main_terminals = {
+        "-X0100:L3_MAIN",
+        "-X0100:N_MAIN",
+        "-X0101:230VL_MAIN",
+        "-X0101:230VN_MAIN",
+    }
+
+    main_components = set()
+
+    for _, row in result.iterrows():
+        name = clean(row.get("Name", ""))
+        name_1 = clean(row.get("Name.1", ""))
+
+        if name_1 in main_terminals and name:
+            main_components.add(component_name(name))
+
+        if name in main_terminals and name_1:
+            main_components.add(component_name(name_1))
+
+    if main_components:
+        page_wire_mask = result["Wireno"].astype(str).str.fullmatch(
+            r"(?:90|91):\d+",
+            case=False,
+            na=False,
+        )
+
+        for index, row in result.loc[page_wire_mask].iterrows():
+            name = clean(row.get("Name", ""))
+            name_1 = clean(row.get("Name.1", ""))
+
+            if (
+                component_name(name) in main_components
+                or component_name(name_1) in main_components
+            ):
+                result.at[index, "Line-Name"] = "1,5"
+                result.at[index, "DaisyNo"] = "0"
+
+    return result.reset_index(drop=True)
     
 
 def stage1_pipeline_13(df: pd.DataFrame) -> pd.DataFrame:
