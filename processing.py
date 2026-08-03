@@ -806,15 +806,15 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
                 if origin:
                     score = (
                         1 if direct_is_fuse else 0,
-                        origin["strength"],
                         page_connection_count(neighbour),
+                        origin["strength"],
                         -branch_length,
                     )
                 else:
                     score = (
                         1 if direct_is_fuse else 0,
-                        0,
                         page_connection_count(neighbour),
+                        0,
                         -branch_length,
                     )
 
