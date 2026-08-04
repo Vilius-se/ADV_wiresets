@@ -2044,162 +2044,170 @@ def stage1_pipeline_24(df):
     return result_df.reset_index(drop=True)
 
 
-def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
+def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
     """
-    Stage 1 Pipeline 25 - Add PE (protective earth) grounding rows based on various conditions
+    PE grandines paima iš originalaus EPLAN failo, todėl ankstesni pipeline
+    negali sugadinti PE Wireno, DaisyNo ar Line-Name.
 
-    Logic:
-    1. Check for "J" symbol after ":" in Name or Name.1 to set has_carel flag
-    2. Add K1011 PE row based on has_carel flag
-    3. Add K5511 PE row if has_carel is False and K5511 exists
-    4. Add transformer PE rows for specific transformers found
-    5. Add motor PE rows based on K924 presence and motor patterns
-    6. Add capacitor PE rows for C903 and C90A1
-    7. Add transformer S2 PE rows for T8x:S2 patterns
-    8. Add T901 PE rows if T901 exists
-    9. Always add X921:PE row if not exists
+    Taisyklės:
+    - Ieškomos visos realios jungtys į -XPE.
+    - Atmetami visi kiti -X... terminalai, išskyrus -X92...
+    - Originalus Line-Name paliekamas.
+    - Originalus 1,0 / 1.0 pakeičiamas į 0,75.
+    - Jei originalus Line-Name tuščias:
+        -T81...                  -> 2,5
+        -K...                    -> 0,75
+        -T... išskyrus -T9...   -> 0,75
+        visa kita               -> 1,5
+    - Wireno visada PE.
+    - Line-Function visada GNYE.
+    - DaisyNo:
+        0,75 -> CONTROL
+        kita -> POWER
     """
-    df = df.copy()
 
-    # Collect all symbols from Name and Name.1
-    all_symbols = set()
-    for col in ('Name', 'Name.1'):
-        if col in df.columns:
-            all_symbols.update(df[col].astype(str).dropna().tolist())
-    all_symbols = {s for s in all_symbols if s and s != 'nan' and s.strip()}
+    df = df.copy().fillna("")
+    source = df_original.copy().fillna("")
 
-    # 1) has_carel flag
-    has_carel = any(':' in s and 'J' in s.split(':', 1)[1] for s in all_symbols)
-
-    # Prepare base columns
-    base_cols = list(df.columns)
-    for col in ('Name','Name.1','Wireno','Line-Name','Line-Function','DaisyNo'):
-        if col not in base_cols:
-            base_cols.append(col)
-
-    new_rows = []
-
-    # 2) K1011 row
-    if has_carel:
-        new_rows.append({
-            'Name':'-K1011:GND J24','Name.1':'-XPE:PE','Wireno':'PE',
-            'Line-Name':'0,75','Line-Function':'GNYE','DaisyNo':'CONTROL'
-        })
-    else:
-        new_rows.append({
-            'Name':'-K1011:PE','Name.1':'-XPE:PE','Wireno':'PE',
-            'Line-Name':'0,75','Line-Function':'GNYE','DaisyNo':'CONTROL'
-        })
-
-    # 3) K5511 row if no carel
-    if not has_carel and any('-K5511:' in s for s in all_symbols):
-        new_rows.append({
-            'Name':'-K5511:PE','Name.1':'-XPE:PE','Wireno':'PE',
-            'Line-Name':'0,75','Line-Function':'GNYE','DaisyNo':'CONTROL'
-        })
-
-    # 4) Transformer rows (only if has_carel)
-    if has_carel:
-        for t in ('-T1011','-T2011','-T3011','-T4011','-T5011','-T5511','-T5711'):
-            if any(t in s for s in all_symbols):
-                new_rows.append({
-                    'Name':f'{t}:-','Name.1':'-XPE:PE','Wireno':'PE',
-                    'Line-Name':'0,75','Line-Function':'GNYE','DaisyNo':'CONTROL'
-                })
-
-    # 5) Motor rows
-    has_k924 = any('-K924' in s for s in all_symbols)
-    motors = [m for m in ('-M923','-M924','-M925') if any(m in s for s in all_symbols)]
-    if motors:
-        if has_k924:
-            if '-M925' in motors:
-                motor_map = [
-                    ('-M923:PE','-X923:PE'),
-                    ('-M924:PE','-X924:PE'),
-                    ('-M925:PE','-X924:PE'),
-                    ('-X923:PE','-XPE:PE'),
-                    ('-X924:PE','-XPE:PE'),
-                ]
-            else:
-                motor_map = [
-                    ('-M923:PE','-X923:PE'),
-                    ('-M924:PE','-X924:PE'),
-                    ('-X923:PE','-XPE:PE'),
-                    ('-X924:PE','-XPE:PE'),
-                ]
-        else:
-            if len(motors)==3:
-                motor_map = [
-                    ('-M923:PE','-X923:PE'),
-                    ('-M924:PE','-X923:PE'),
-                    ('-M925:PE','-X923:PE'),
-                    ('-X923:PE','-XPE:PE'),
-                ]
-            elif len(motors)==2:
-                motor_map = [
-                    ('-M923:PE','-X923:PE'),
-                    ('-M924:PE','-X923:PE'),
-                    ('-X923:PE','-XPE:PE'),
-                ]
-            else:
-                motor_map = [
-                    ('-M923:PE','-X923:PE'),
-                    ('-X923:PE','-XPE:PE'),
-                ]
-        for n1,n2 in motor_map:
-            new_rows.append({'Name':n1,'Name.1':n2,'Wireno':'PE',
-                             'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'POWER'})
-
-    # 6) Capacitor rows
-    if any('-C903:' in s for s in all_symbols):
-        for c in ('-C903:11','-C903:1'):
-            new_rows.append({'Name':c,'Name.1':'-XPE:PE','Wireno':'PE',
-                             'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'CONTROL'})
-    if any('-C90A1:' in s for s in all_symbols):
-        for c in ('-C90A1:PE','-C90A1:-'):
-            new_rows.append({'Name':c,'Name.1':'-XPE:PE','Wireno':'PE',
-                             'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'CONTROL'})
-
-    # 7) T8x:S2 rows
-    t8_matches = [s for s in all_symbols if re.match(r'-T8.*:S2', s)]
-    if t8_matches:
-        for t in ('-T81:S2','-T81.1:S2','-T81.2:S2'):
-            new_rows.append({'Name':t,'Name.1':'-XPE:PE','Wireno':'PE',
-                             'Line-Name':'2,5','Line-Function':'GNYE','DaisyNo':'POWER'})
-
-    # 8) T901 rows
-    if any('-T901:' in s for s in all_symbols):
-        for t in ('-T901:PE','-T901:0 V'):
-            new_rows.append({'Name':t,'Name.1':'-XPE:PE','Wireno':'PE',
-                             'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'CONTROL'})
-
-    # 9) Always add X921:PE if missing
-    exists = any(
-        (r.get('Name')=='-X921:PE' and r.get('Name.1')=='-XPE:PE')
-        for _,r in df.iterrows()
-    )
-    if not exists:
-        new_rows.append({'Name':'-X921:PE','Name.1':'-XPE:PE','Wireno':'PE',
-                         'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'CONTROL'})
-    
-    # 10) X927/X928 PE rows - NEW ADDITION
-    #x_terminals = ['-X927', '-X928']
-    #for x_term in x_terminals:
-    #    if any(x_term in s for s in all_symbols):
-    #        new_rows.append({
-    #            'Name':f'{x_term}:PE','Name.1':'-XPE:PE','Wireno':'PE',
-    #            'Line-Name':'1,5','Line-Function':'GNYE','DaisyNo':'POWER'
-    #        })
-    # Ensure all keys
-    for row in new_rows:
-        for c in base_cols:
-            row.setdefault(c, '')
-
-    # Append and return
-    if new_rows:
-        return pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True).reset_index(drop=True)
-    else:
+    required = {"Name", "Name.1"}
+    if not required.issubset(df.columns):
         return df.reset_index(drop=True)
+
+    if not required.issubset(source.columns):
+        return df.reset_index(drop=True)
+
+    # Originaliam failui pritaikome tik bendrą tekstų normalizavimą.
+    source = stage1_pipeline_3(source)
+
+    for column in ("Wireno", "Line-Name", "Line-Function", "DaisyNo"):
+        if column not in df.columns:
+            df[column] = ""
+
+    base_columns = list(df.columns)
+
+    def clean(value):
+        value = str(value).strip()
+        return "" if value.lower() in {"nan", "none", "null"} else value
+
+    def designation(endpoint):
+        """
+        Pašalina vietos prefiksą, jei toks yra:
+        +L.4/-M341:PE -> -M341:PE
+        +L.4/-XPE:PE -> -XPE:PE
+        """
+        endpoint = clean(endpoint)
+        return endpoint.rsplit("/", 1)[-1] if "/" in endpoint else endpoint
+
+    def component_name(endpoint):
+        endpoint = designation(endpoint)
+        return endpoint.rsplit(":", 1)[0] if ":" in endpoint else endpoint
+
+    def is_xpe(endpoint):
+        return component_name(endpoint).upper() == "-XPE"
+
+    def keep_component(endpoint):
+        component = component_name(endpoint).upper()
+
+        if not component:
+            return False
+
+        # Atmetami visi -X..., išskyrus -X92...
+        if component.startswith("-X"):
+            return component.startswith("-X92")
+
+        return True
+
+    def normalize_line_name(value):
+        value = clean(value)
+
+        if value in {"1,0", "1.0"}:
+            return "0,75"
+
+        return value
+
+    def default_line_name(endpoint):
+        component = component_name(endpoint).upper()
+
+        if component.startswith("-T81"):
+            return "2,5"
+
+        if component.startswith("-K"):
+            return "0,75"
+
+        if component.startswith("-T") and not component.startswith("-T9"):
+            return "0,75"
+
+        return "1,5"
+
+    # Iš apdoroto df pašaliname visas senas PE / XPE eilutes.
+    processed_xpe_mask = df.apply(
+        lambda row: (
+            is_xpe(row.get("Name", ""))
+            or is_xpe(row.get("Name.1", ""))
+            or clean(row.get("Wireno", "")).upper() == "PE"
+        ),
+        axis=1,
+    )
+
+    result = df.loc[~processed_xpe_mask].copy()
+
+    generated_rows = []
+    seen_components = set()
+
+    for _, source_row in source.iterrows():
+        name = clean(source_row.get("Name", ""))
+        name_1 = clean(source_row.get("Name.1", ""))
+
+        if is_xpe(name) and not is_xpe(name_1):
+            component_endpoint = designation(name_1)
+        elif is_xpe(name_1) and not is_xpe(name):
+            component_endpoint = designation(name)
+        else:
+            continue
+
+        if not keep_component(component_endpoint):
+            continue
+
+        # Vienam realiam PE kontaktui generuojama viena eilutė.
+        component_key = component_endpoint.upper()
+
+        if component_key in seen_components:
+            continue
+
+        seen_components.add(component_key)
+
+        line_name = normalize_line_name(
+            source_row.get("Line-Name", "")
+        )
+
+        if not line_name:
+            line_name = default_line_name(component_endpoint)
+
+        daisy_no = "CONTROL" if line_name == "0,75" else "POWER"
+
+        new_row = {column: "" for column in base_columns}
+
+        new_row.update({
+            "Name": component_endpoint,
+            "Name.1": "-XPE:PE",
+            "Wireno": "PE",
+            "Line-Name": line_name,
+            "Line-Function": "GNYE",
+            "DaisyNo": daisy_no,
+        })
+
+        generated_rows.append(new_row)
+
+    if generated_rows:
+        result = pd.concat(
+            [
+                result,
+                pd.DataFrame(generated_rows, columns=base_columns),
+            ],
+            ignore_index=True,
+        )
+
+    return result.reset_index(drop=True)
 
 def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
     """
