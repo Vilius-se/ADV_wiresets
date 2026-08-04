@@ -205,17 +205,11 @@ if st.session_state.stage == "eplan":
                 df_stage1 = stage1_pipeline_22(df_stage1)
                 df_stage1 = stage1_pipeline_23(df_stage1)
                 df_stage1 = stage1_pipeline_24(df_stage1)
+                df_stage1 = stage1_pipeline_25(df_stage1)
                 df_stage1 = stage1_pipeline_26(df_stage1)
                 df_stage1 = stage1_pipeline_27(df_stage1)
                 df_stage1 = stage1_pipeline_28(df_stage1, component_to_group)
                 df_stage1 = stage1_pipeline_29(df_stage1, df_original)
-                df_stage1 = stage1_pipeline_25(df_stage1, df_original)
-                st.write(
-                    "PE M92 testas:",
-                    df_stage1[
-                        df_stage1["Name"].astype(str).str.match(r"-M92\d+:PE", na=False)
-                    ][["Name", "Name.1", "Wireno", "Line-Name", "Line-Function", "DaisyNo"]]
-                )
                 # ── ADD THIS SNIPPET TO CALCULATE AND DISPLAY -XPE TERMINALS ─────────
                 # Count rows where Line-Function is GNYE
                 gnyc_count = (df_stage1['Line-Function'] == 'GNYE').sum()
