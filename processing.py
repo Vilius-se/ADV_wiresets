@@ -1632,40 +1632,44 @@ def stage1_pipeline_24(df):
     return result_df.reset_index(drop=True)
 
 
-def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
+def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
     """
-    PE grandinių atranka pagal realias schemos jungtis į -XPE.
+    PE grandines paima iš originalaus EPLAN failo, todėl ankstesni pipeline
+    negali sugadinti PE Wireno, DaisyNo ar Line-Name.
 
     Taisyklės:
-    - Imamos tik realios eilutės, kur Name arba Name.1 prasideda "-XPE".
-    - Visi kiti -X... terminalai atmetami, išskyrus -X92...
-    - Esamas Line-Name paliekamas; 1,0 pakeičiamas į 0,75.
-    - Jei Line-Name tuščias:
+    - Ieškomos visos realios jungtys į -XPE.
+    - Atmetami visi kiti -X... terminalai, išskyrus -X92...
+    - Originalus Line-Name paliekamas.
+    - Originalus 1,0 / 1.0 pakeičiamas į 0,75.
+    - Jei originalus Line-Name tuščias:
         -T81...                  -> 2,5
         -K...                    -> 0,75
         -T... išskyrus -T9...   -> 0,75
         visa kita               -> 1,5
+    - Wireno visada PE.
     - Line-Function visada GNYE.
-    - Esamas DaisyNo paliekamas.
-      Jei tuščias: 0,75 -> CONTROL, kita -> POWER.
+    - DaisyNo:
+        0,75 -> CONTROL
+        kita -> POWER
     """
 
     df = df.copy().fillna("")
+    source = df_original.copy().fillna("")
 
-    required_columns = {"Name", "Name.1"}
-    if not required_columns.issubset(df.columns):
+    required = {"Name", "Name.1"}
+    if not required.issubset(df.columns):
         return df.reset_index(drop=True)
 
-    required_output_columns = {
-        "Wireno": "",
-        "Line-Name": "",
-        "Line-Function": "",
-        "DaisyNo": "",
-    }
+    if not required.issubset(source.columns):
+        return df.reset_index(drop=True)
 
-    for column, default_value in required_output_columns.items():
+    # Originaliam failui pritaikome tik bendrą tekstų normalizavimą.
+    source = stage1_pipeline_3(source)
+
+    for column in ("Wireno", "Line-Name", "Line-Function", "DaisyNo"):
         if column not in df.columns:
-            df[column] = default_value
+            df[column] = ""
 
     base_columns = list(df.columns)
 
@@ -1673,14 +1677,21 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
         value = str(value).strip()
         return "" if value.lower() in {"nan", "none", "null"} else value
 
-    def component_name(endpoint):
+    def designation(endpoint):
+        """
+        Pašalina vietos prefiksą, jei toks yra:
+        +L.4/-M341:PE -> -M341:PE
+        +L.4/-XPE:PE -> -XPE:PE
+        """
         endpoint = clean(endpoint)
-        if ":" not in endpoint:
-            return endpoint
-        return endpoint.rsplit(":", 1)[0]
+        return endpoint.rsplit("/", 1)[-1] if "/" in endpoint else endpoint
+
+    def component_name(endpoint):
+        endpoint = designation(endpoint)
+        return endpoint.rsplit(":", 1)[0] if ":" in endpoint else endpoint
 
     def is_xpe(endpoint):
-        return clean(endpoint).upper().startswith("-XPE")
+        return component_name(endpoint).upper() == "-XPE"
 
     def keep_component(endpoint):
         component = component_name(endpoint).upper()
@@ -1688,6 +1699,7 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
         if not component:
             return False
 
+        # Atmetami visi -X..., išskyrus -X92...
         if component.startswith("-X"):
             return component.startswith("-X92")
 
@@ -1715,42 +1727,42 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
 
         return "1,5"
 
-    xpe_mask = (
-        df["Name"].astype(str).str.upper().str.startswith("-XPE", na=False)
-        | df["Name.1"].astype(str).str.upper().str.startswith("-XPE", na=False)
+    # Iš apdoroto df pašaliname visas senas PE / XPE eilutes.
+    processed_xpe_mask = df.apply(
+        lambda row: (
+            is_xpe(row.get("Name", ""))
+            or is_xpe(row.get("Name.1", ""))
+            or clean(row.get("Wireno", "")).upper() == "PE"
+        ),
+        axis=1,
     )
 
-    xpe_rows = df.loc[xpe_mask].copy()
-    remaining_df = df.loc[~xpe_mask].copy()
+    result = df.loc[~processed_xpe_mask].copy()
 
     generated_rows = []
-    seen_pairs = set()
+    seen_components = set()
 
-    for _, source_row in xpe_rows.iterrows():
+    for _, source_row in source.iterrows():
         name = clean(source_row.get("Name", ""))
         name_1 = clean(source_row.get("Name.1", ""))
 
         if is_xpe(name) and not is_xpe(name_1):
-            component_endpoint = name_1
-            xpe_endpoint = name
+            component_endpoint = designation(name_1)
         elif is_xpe(name_1) and not is_xpe(name):
-            component_endpoint = name
-            xpe_endpoint = name_1
+            component_endpoint = designation(name)
         else:
             continue
 
         if not keep_component(component_endpoint):
             continue
 
-        pair_key = (
-            component_endpoint.upper(),
-            xpe_endpoint.upper(),
-        )
+        # Vienam realiam PE kontaktui generuojama viena eilutė.
+        component_key = component_endpoint.upper()
 
-        if pair_key in seen_pairs:
+        if component_key in seen_components:
             continue
 
-        seen_pairs.add(pair_key)
+        seen_components.add(component_key)
 
         line_name = normalize_line_name(
             source_row.get("Line-Name", "")
@@ -1759,19 +1771,13 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
         if not line_name:
             line_name = default_line_name(component_endpoint)
 
-        daisy_no = clean(source_row.get("DaisyNo", ""))
-
-        if not daisy_no:
-            daisy_no = "CONTROL" if line_name == "0,75" else "POWER"
+        daisy_no = "CONTROL" if line_name == "0,75" else "POWER"
 
         new_row = {column: "" for column in base_columns}
 
-        for column in base_columns:
-            new_row[column] = source_row.get(column, "")
-
         new_row.update({
             "Name": component_endpoint,
-            "Name.1": xpe_endpoint,
+            "Name.1": "-XPE:PE",
             "Wireno": "PE",
             "Line-Name": line_name,
             "Line-Function": "GNYE",
@@ -1783,13 +1789,11 @@ def stage1_pipeline_25(df: pd.DataFrame) -> pd.DataFrame:
     if generated_rows:
         result = pd.concat(
             [
-                remaining_df,
+                result,
                 pd.DataFrame(generated_rows, columns=base_columns),
             ],
             ignore_index=True,
         )
-    else:
-        result = remaining_df.reset_index(drop=True)
 
     return result.reset_index(drop=True)
 
