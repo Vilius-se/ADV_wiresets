@@ -47,13 +47,36 @@ def stage1_pipeline_1(df: pd.DataFrame):
 
 def stage1_pipeline_2(df: pd.DataFrame) -> pd.DataFrame:
     block_values = [
-        "cable", "Cable", "External", "GNYE", "Interal cable", "Internal Cable",
-        "internal cable", "Internal cable", "Power", "power"
+        "cable", "Cable", "External", "GNYE",
+        "Interal cable", "Internal Cable",
+        "internal cable", "Internal cable",
+        "Power", "power"
     ]
-    if 'Line-Function' in df.columns:
-        df = df[~df['Line-Function'].isin(block_values)]
-    mask_pe = ~df.astype(str).apply(lambda col: col.str.contains("PE", na=False)).any(axis=1)
-    df = df[mask_pe]
+
+    # Tikros XPE jungtys
+    xpe_mask = (
+        df["Name"].astype(str).str.contains(r"-XPE(?::|$)", regex=True, na=False)
+        | df["Name.1"].astype(str).str.contains(r"-XPE(?::|$)", regex=True, na=False)
+    )
+
+    # Šalinam Cable/GNYE ir kt., bet paliekam XPE jungtis
+    if "Line-Function" in df.columns:
+        blocked_mask = df["Line-Function"].isin(block_values)
+        df = df[~blocked_mask | xpe_mask]
+
+    # Perskaičiuojam po pirmo filtravimo
+    xpe_mask = (
+        df["Name"].astype(str).str.contains(r"-XPE(?::|$)", regex=True, na=False)
+        | df["Name.1"].astype(str).str.contains(r"-XPE(?::|$)", regex=True, na=False)
+    )
+
+    # Šalinam PE eilutes, išskyrus tas, kurios jungiasi į XPE
+    contains_pe = df.astype(str).apply(
+        lambda col: col.str.contains("PE", case=False, na=False)
+    ).any(axis=1)
+
+    df = df[~contains_pe | xpe_mask]
+
     return df
 
 def stage1_pipeline_3(df: pd.DataFrame) -> pd.DataFrame:
