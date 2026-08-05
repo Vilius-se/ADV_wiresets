@@ -3863,7 +3863,6 @@ def validate_distribution_terminals(df: pd.DataFrame) -> pd.DataFrame:
         found_color = normalize_color(
             row.get("Line-Function", "")
         ).upper()
-        )
 
         # --------------------------------------------------
         # SPALVOS PATIKRA
