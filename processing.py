@@ -2076,6 +2076,16 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
     df = df.copy().fillna("")
     source = df_original.copy().fillna("")
 
+    # PE jungčių sąrašas imamas iš originalaus failo,
+    # tačiau skerspjūviai tikrinami ir dabartiniame apdorotame df.
+    size_source = pd.concat(
+        [
+            df.copy().fillna(""),
+            stage1_pipeline_3(df_original.copy().fillna("")),
+        ],
+        ignore_index=True,
+    )
+
     required_columns = {"Name", "Name.1"}
 
     if not required_columns.issubset(df.columns):
@@ -2208,7 +2218,7 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         exact_endpoint = normalize_endpoint(endpoint)
         found_sizes = []
 
-        for _, row in source.iterrows():
+        for _, row in size_source.iterrows():
             name = normalize_endpoint(row.get("Name", ""))
             name_1 = normalize_endpoint(row.get("Name.1", ""))
 
