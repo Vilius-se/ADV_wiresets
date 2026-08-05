@@ -2043,7 +2043,6 @@ def stage1_pipeline_24(df):
     
     return result_df.reset_index(drop=True)
 
-
 def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
     """
     PE grandines paima iš originalaus EPLAN failo.
@@ -2140,6 +2139,65 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         value = clean(value)
         return "0,75" if value in {"1,0", "1.0"} else value
 
+    def related_line_name(endpoint):
+        """
+        Jei PE eilutėje skerspjūvis nenurodytas, tikrina kitus laidus,
+        prijungtus prie to paties tikslaus kontakto.
+
+        Jei randami keli skerspjūviai, pasirenkamas didžiausias.
+        Viso komponento kontaktai netikrinami.
+        """
+        exact_endpoint = designation(endpoint).upper()
+        found_sizes = []
+
+        for _, row in source.iterrows():
+            name = designation(row.get("Name", "")).upper()
+            name_1 = designation(row.get("Name.1", "")).upper()
+
+            if exact_endpoint not in {name, name_1}:
+                continue
+
+            line_name = normalize_line_name(
+                row.get("Line-Name", "")
+            )
+
+            if line_name:
+                found_sizes.append(line_name)
+
+        if not found_sizes:
+            return ""
+
+        size_values = {
+            "0,5": 0.5,
+            "0,75": 0.75,
+            "1,5": 1.5,
+            "2,5": 2.5,
+            "4": 4.0,
+            "6": 6.0,
+            "10": 10.0,
+            "16": 16.0,
+            "25": 25.0,
+            "35": 35.0,
+            "50": 50.0,
+            "70": 70.0,
+            "95": 95.0,
+            "120": 120.0,
+        }
+
+        valid_sizes = [
+            size
+            for size in found_sizes
+            if size in size_values
+        ]
+
+        if not valid_sizes:
+            return found_sizes[0]
+
+        return max(
+            valid_sizes,
+            key=lambda size: size_values[size],
+        )
+
     def default_line_name(endpoint):
         component = component_name(endpoint).upper()
 
@@ -2190,6 +2248,9 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         seen_endpoints.add(endpoint_key)
 
         line_name = normalize_line_name(source_row.get("Line-Name", ""))
+
+        if not line_name:
+            line_name = related_line_name(component_endpoint)
 
         if not line_name:
             line_name = default_line_name(component_endpoint)
@@ -2251,6 +2312,7 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         )
 
     return result.reset_index(drop=True)
+
 def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
     """
     Stage 1 Pipeline 26 – sutvarko :01 grandines su :3 ir :6 kontaktais.
