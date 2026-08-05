@@ -2100,6 +2100,18 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         endpoint = clean(endpoint)
         return endpoint.rsplit("/", 1)[-1] if "/" in endpoint else endpoint
 
+    def normalize_endpoint(endpoint):
+        """
+        Normalizuoja tikslų pajungimo tašką palyginimui:
+        - pašalina vietos prefiksą;
+        - pakeičia į didžiąsias raides;
+        - pašalina visus tarpus.
+
+        Pvz. -T901:0 V* ir -T901:0V* laikomi tuo pačiu kontaktu.
+        """
+        endpoint = designation(endpoint).upper()
+        return re.sub(r"\s+", "", endpoint)
+
     def component_name(endpoint):
         endpoint = designation(endpoint)
         return endpoint.rsplit(":", 1)[0] if ":" in endpoint else endpoint
@@ -2188,12 +2200,12 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         esant 0,75 ir 1,5 prie to paties kontakto pasirenkama 1,5.
         Viso komponento kiti kontaktai netikrinami.
         """
-        exact_endpoint = designation(endpoint).upper()
+        exact_endpoint = normalize_endpoint(endpoint)
         found_sizes = []
 
         for _, row in source.iterrows():
-            name = designation(row.get("Name", "")).upper()
-            name_1 = designation(row.get("Name.1", "")).upper()
+            name = normalize_endpoint(row.get("Name", ""))
+            name_1 = normalize_endpoint(row.get("Name.1", ""))
 
             if exact_endpoint not in {name, name_1}:
                 continue
