@@ -2050,7 +2050,7 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
     Atranka:
     - Imamos tik realios jungtys į -XPE.
-    - Kontaktai su simboliu ⏚ atmetami.
+    - Kontaktai su simboliu ⏚ atmetami, išskyrus -T9...
     - Iš -M... paliekami tik -M92...
     - Iš -T... paliekami:
         -T81...  -> 2,5 mm²
@@ -2060,6 +2060,10 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
     - Iš -X... paliekami tik -X92...
     - Kiti komponentai paliekami.
 
+    Papildoma T81 logika:
+    - Originaliame faile surandami visi realiai esantys T81 variantai.
+    - Kiekvienam sugeneruojama PE jungtis per S2.
+
     Storiai:
     - Jei originale Line-Name nurodytas, jis paliekamas.
     - 1,0 / 1.0 pakeičiama į 0,75.
@@ -2068,11 +2072,6 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         -T...   -> 1,5
         -K...   -> 0,75
         visa kita -> 1,5
-
-    Rezultatas:
-    - Wireno = PE
-    - Line-Function = GNYE
-    - DaisyNo = CONTROL, jei 0,75; kitu atveju POWER
     """
 
     df = df.copy().fillna("")
@@ -2116,7 +2115,8 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         if not component:
             return False
 
-        if "⏚" in endpoint:
+        # Kontaktai su ⏚ atmetami visiems, išskyrus T9...
+        if "⏚" in endpoint and not component.startswith("-T9"):
             return False
 
         if component.startswith("-M"):
@@ -2208,14 +2208,49 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
         generated_rows.append(new_row)
 
+    # Surandami visi realiai projekte esantys T81 grupės komponentai.
+    t81_components = set()
+
+    for _, source_row in source.iterrows():
+        for column in ("Name", "Name.1"):
+            endpoint = designation(source_row.get(column, ""))
+            component = component_name(endpoint).upper()
+
+            if re.fullmatch(r"-T81(?:\.\d+)?", component):
+                t81_components.add(component)
+
+    # Kiekvienam T81 variantui sukuriama PE jungtis per S2.
+    for component in sorted(t81_components):
+        component_endpoint = f"{component}:S2"
+        endpoint_key = component_endpoint.upper()
+
+        if endpoint_key in seen_endpoints:
+            continue
+
+        seen_endpoints.add(endpoint_key)
+
+        new_row = {column: "" for column in base_columns}
+        new_row.update({
+            "Name": component_endpoint,
+            "Name.1": "-XPE:PE",
+            "Wireno": "PE",
+            "Line-Name": "2,5",
+            "Line-Function": "GNYE",
+            "DaisyNo": "POWER",
+        })
+
+        generated_rows.append(new_row)
+
     if generated_rows:
         result = pd.concat(
-            [result, pd.DataFrame(generated_rows, columns=base_columns)],
+            [
+                result,
+                pd.DataFrame(generated_rows, columns=base_columns),
+            ],
             ignore_index=True,
         )
 
     return result.reset_index(drop=True)
-
 def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
     """
     Stage 1 Pipeline 26 – sutvarko :01 grandines su :3 ir :6 kontaktais.
