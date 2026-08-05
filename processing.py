@@ -3643,3 +3643,343 @@ def stage2_final_text_to_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.fillna("").astype(str)
 
     return df
+
+# ==========================================================
+# VALIDATION FUNCTIONS
+# ==========================================================
+
+def validate_distribution_terminals(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Patikrina pagrindines paskirstymo grandines.
+
+    Terminalų taisyklės:
+      F903/L3, F903/N, 230VL2, 230VN2 -> X0100
+      230VL, 230VN                    -> X0101
+      24VDC, 0VDC, 24VDC1/2/3        -> X0102
+
+    Spalvų taisyklės:
+      F903/L3 -> BK
+      F903/N  -> BU
+      230VL2  -> BK
+      230VN2  -> BU
+      230VL   -> RD
+      230VN   -> RD/WH
+      24VDC, 24VDC1/2/3 -> DBU
+      0VDC    -> DBU/WH
+
+    Funkcija failo nekeičia.
+    Ji tik grąžina rastų problemų lentelę.
+    """
+
+    error_columns = [
+        "Error type",
+        "Wireno",
+        "Expected",
+        "Found",
+        "Name",
+        "Name.1",
+        "Problem",
+    ]
+
+    required_columns = {
+        "Name",
+        "Name.1",
+        "Wireno",
+        "Line-Function",
+    }
+
+    if not required_columns.issubset(df.columns):
+        missing_columns = sorted(
+            required_columns - set(df.columns)
+        )
+
+        return pd.DataFrame(
+            [
+                {
+                    "Error type": "Missing column",
+                    "Wireno": "",
+                    "Expected": ", ".join(missing_columns),
+                    "Found": "",
+                    "Name": "",
+                    "Name.1": "",
+                    "Problem": (
+                        "Faile trūksta patikrai reikalingų stulpelių: "
+                        + ", ".join(missing_columns)
+                    ),
+                }
+            ],
+            columns=error_columns,
+        )
+
+    source = df.copy().fillna("")
+
+    for column in source.columns:
+        source[column] = (
+            source[column]
+            .astype(str)
+            .str.strip()
+        )
+
+    rules = {
+        "F903/L3": {
+            "terminal": "-X0100",
+            "color": "BK",
+        },
+        "F903/N": {
+            "terminal": "-X0100",
+            "color": "BU",
+        },
+        "230VL2": {
+            "terminal": "-X0100",
+            "color": "BK",
+        },
+        "230VN2": {
+            "terminal": "-X0100",
+            "color": "BU",
+        },
+        "230VL": {
+            "terminal": "-X0101",
+            "color": "RD",
+        },
+        "230VN": {
+            "terminal": "-X0101",
+            "color": "RD/WH",
+        },
+        "24VDC": {
+            "terminal": "-X0102",
+            "color": "DBU",
+        },
+        "0VDC": {
+            "terminal": "-X0102",
+            "color": "DBU/WH",
+        },
+        "24VDC1": {
+            "terminal": "-X0102",
+            "color": "DBU",
+        },
+        "24VDC2": {
+            "terminal": "-X0102",
+            "color": "DBU",
+        },
+        "24VDC3": {
+            "terminal": "-X0102",
+            "color": "DBU",
+        },
+    }
+
+    distribution_components = {
+        "-X0100",
+        "-X0101",
+        "-X0102",
+    }
+
+    color_replacements = {
+        "DBL": "DBU",
+        "DBLWH": "DBU/WH",
+        "DBUWH": "DBU/WH",
+        "RDWH": "RD/WH",
+        "LBL": "BU",
+    }
+
+    wireno_replacements = {
+        "24VDC.": "24VDC",
+        "24VDC1.": "24VDC1",
+        "24VDC2.": "24VDC2",
+        "24VDC3.": "24VDC3",
+        "0VDC.": "0VDC",
+    }
+
+    def clean(value):
+        value = str(value).strip()
+
+        if value.lower() in {
+            "",
+            "nan",
+            "none",
+            "null",
+        }:
+            return ""
+
+        return value
+
+    def designation(endpoint):
+        """
+        Pašalina vietos prefiksą.
+
+        Pvz.:
+        +L.1/-X0102:N -> -X0102:N
+        """
+        endpoint = clean(endpoint)
+
+        if "/" in endpoint:
+            endpoint = endpoint.rsplit("/", 1)[-1]
+
+        return endpoint
+
+    def component_name(endpoint):
+        endpoint = designation(endpoint)
+
+        if ":" in endpoint:
+            endpoint = endpoint.rsplit(":", 1)[0]
+
+        return endpoint.upper()
+
+    def normalize_wireno(value):
+        value = clean(value)
+        return wireno_replacements.get(value, value)
+
+    def normalize_color(value):
+        value = clean(value).upper()
+        return color_replacements.get(value, value)
+
+    errors = []
+
+    found_correct_terminal = {
+        wireno: False
+        for wireno in rules
+    }
+
+    wrong_terminal_wirenos = set()
+
+    for _, row in source.iterrows():
+        wireno = normalize_wireno(
+            row.get("Wireno", "")
+        )
+
+        if wireno not in rules:
+            continue
+
+        name = designation(
+            row.get("Name", "")
+        )
+
+        name_1 = designation(
+            row.get("Name.1", "")
+        )
+
+        expected_terminal = rules[wireno]["terminal"]
+        expected_color = rules[wireno]["color"]
+
+        found_color = normalize_color(
+            row.get("Line-Function", "")
+        )
+
+        # --------------------------------------------------
+        # SPALVOS PATIKRA
+        # --------------------------------------------------
+        if found_color != expected_color:
+            if found_color:
+                problem = (
+                    f"{wireno} spalva yra {found_color}, "
+                    f"bet turi būti {expected_color}"
+                )
+            else:
+                problem = (
+                    f"{wireno} spalva nenurodyta, "
+                    f"bet turi būti {expected_color}"
+                )
+
+            errors.append({
+                "Error type": "Wrong color",
+                "Wireno": wireno,
+                "Expected": expected_color,
+                "Found": found_color,
+                "Name": name,
+                "Name.1": name_1,
+                "Problem": problem,
+            })
+
+        # --------------------------------------------------
+        # TERMINALO PATIKRA
+        # --------------------------------------------------
+        row_distribution_terminals = []
+
+        for endpoint in (name, name_1):
+            endpoint_component = component_name(endpoint)
+
+            if endpoint_component in distribution_components:
+                row_distribution_terminals.append(endpoint)
+
+        # Eilutė tiesiogiai nesijungia prie X0100/X0101/X0102.
+        if not row_distribution_terminals:
+            continue
+
+        for terminal_endpoint in row_distribution_terminals:
+            found_terminal = component_name(
+                terminal_endpoint
+            )
+
+            if found_terminal == expected_terminal:
+                found_correct_terminal[wireno] = True
+                continue
+
+            wrong_terminal_wirenos.add(wireno)
+
+            errors.append({
+                "Error type": "Wrong terminal",
+                "Wireno": wireno,
+                "Expected": expected_terminal,
+                "Found": terminal_endpoint,
+                "Name": name,
+                "Name.1": name_1,
+                "Problem": (
+                    f"{wireno} priskirtas {found_terminal}, "
+                    f"bet turi būti {expected_terminal}"
+                ),
+            })
+
+    # ------------------------------------------------------
+    # GRANDINĖ YRA, BET TINKAMAS TERMINALAS NERASTAS
+    # ------------------------------------------------------
+    existing_wirenos = {
+        normalize_wireno(value)
+        for value in source["Wireno"]
+    }
+
+    for wireno, rule in rules.items():
+        if wireno not in existing_wirenos:
+            continue
+
+        if found_correct_terminal[wireno]:
+            continue
+
+        # Jei jau rasta konkreti blogo terminalo eilutė,
+        # bendro perspėjimo nebekuriame.
+        if wireno in wrong_terminal_wirenos:
+            continue
+
+        errors.append({
+            "Error type": "Terminal not found",
+            "Wireno": wireno,
+            "Expected": rule["terminal"],
+            "Found": "",
+            "Name": "",
+            "Name.1": "",
+            "Problem": (
+                f"{wireno} yra faile, bet nerasta jo jungtis "
+                f"prie {rule['terminal']}"
+            ),
+        })
+
+    result = pd.DataFrame(
+        errors,
+        columns=error_columns,
+    )
+
+    if not result.empty:
+        result = (
+            result
+            .drop_duplicates()
+            .sort_values(
+                by=[
+                    "Error type",
+                    "Wireno",
+                    "Name",
+                    "Name.1",
+                ],
+                ascending=True,
+            )
+            .reset_index(drop=True)
+        )
+
+    return result
