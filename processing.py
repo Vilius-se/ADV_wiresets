@@ -2169,36 +2169,41 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
     }
 
     def largest_line_name(values):
-        values = [
-            normalize_line_name(value)
-            for value in values
-            if normalize_line_name(value)
-        ]
+        normalized_values = []
 
-        if not values:
+        for value in values:
+            normalized = normalize_line_name(value)
+
+            if normalized:
+                normalized_values.append(normalized)
+
+        if not normalized_values:
             return ""
 
         valid_values = [
             value
-            for value in values
+            for value in normalized_values
             if value in size_values
         ]
 
-        if not valid_values:
-            return values[0]
+        if valid_values:
+            return max(
+                valid_values,
+                key=lambda value: size_values[value],
+            )
 
-        return max(
-            valid_values,
-            key=lambda value: size_values[value],
-        )
+        return normalized_values[0]
 
-    def related_line_name(endpoint):
+    def contact_max_line_name(endpoint):
         """
-        Tikrina visus laidus, prijungtus prie to paties tikslaus kontakto.
+        Surenka visų originalaus failo laidų skerspjūvius,
+        kurie jungiasi prie to paties tikslaus kontakto.
 
-        Į tikrinimą patenka ir pati PE eilutė, todėl, pavyzdžiui,
-        esant 0,75 ir 1,5 prie to paties kontakto pasirenkama 1,5.
-        Viso komponento kiti kontaktai netikrinami.
+        Pvz.:
+        -T901:0V* -> 230VN_MAIN   1,5
+        -T901:0V* -> XPE          0,75
+
+        Rezultatas: 1,5.
         """
         exact_endpoint = normalize_endpoint(endpoint)
         found_sizes = []
@@ -2268,17 +2273,9 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
         seen_endpoints.add(endpoint_key)
 
-        original_line_name = normalize_line_name(
-            source_row.get("Line-Name", "")
-        )
-        contact_line_name = related_line_name(component_endpoint)
-
-        # Visada lyginamas originalios PE eilutės storis su kitais
-        # laidais prie to paties kontakto ir pasirenkamas didžiausias.
-        line_name = largest_line_name([
-            original_line_name,
-            contact_line_name,
-        ])
+        # Visada tikrinami visi originalaus failo laidai,
+        # prijungti prie to paties tikslaus kontakto.
+        line_name = contact_max_line_name(component_endpoint)
 
         if not line_name:
             line_name = default_line_name(component_endpoint)
