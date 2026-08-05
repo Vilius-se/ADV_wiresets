@@ -71,40 +71,6 @@ st.markdown("""
 .stButton > button:hover {transform: translateY(-2px);}
 .success-message {color: #22c55e; font-weight: 600; font-size: 0.9rem;}
 .blank-cell-highlight {background-color: #fef3c7 !important; border: 2px solid #f59e0b !important;}
-.result-section-title {
-    color: #3f3f3f !important;
-    font-family: monospace;
-    font-weight: 700;
-    margin: 0;
-    padding: 0;
-    line-height: 1.15;
-}
-.result-row {
-    color: #3f3f3f !important;
-    font-family: monospace;
-    font-weight: 500;
-    margin: 0;
-    padding: 0;
-    line-height: 1.15;
-    white-space: pre;
-}
-.terminal-group-title {
-    color: #3f3f3f !important;
-    font-family: monospace;
-    font-weight: 700;
-    margin: 0;
-    padding: 0;
-    line-height: 1.15;
-}
-.terminal-row {
-    color: #3f3f3f !important;
-    font-family: monospace;
-    font-weight: 500;
-    margin: 0;
-    padding: 0;
-    line-height: 1.15;
-    white-space: pre;
-}
 #MainMenu, footer, header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
@@ -169,8 +135,10 @@ if st.session_state.stage == "eplan":
             )
 
             try:
+                start_time = time.perf_counter()
                 df = pd.read_excel(uploaded_file)
                 df_original = df.copy()
+                end_time = time.perf_counter()
             except Exception as e:
                 st.error(f"⚠️ SYSTEM ERROR: {e}")
                 st.stop()
@@ -229,17 +197,46 @@ if st.session_state.stage == "eplan":
                     ),
                 )
 
+        # ---------------------------------------------------------
+        # DUPLICATE ENDPOINT / WIRENO CHECK
+        # ---------------------------------------------------------
+        if uploaded_file is not None:
+            st.markdown("### 🔎 Duplicate Endpoint / Wireno Check")
+
+            endpoint_errors = validate_duplicate_endpoint_wirenos(
+                df_original
+            )
+
+            if endpoint_errors.empty:
+                st.success(
+                    "✅ Nerasta komponentų kontaktų, naudojamų su keliais skirtingais Wireno."
+                )
+            else:
+                st.error(
+                    f"❌ Rasta {len(endpoint_errors)} komponentų kontaktų su skirtingais Wireno."
+                )
+
+                st.dataframe(
+                    endpoint_errors,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(
+                        500,
+                        80 + len(endpoint_errors) * 35,
+                    ),
+                )
+
         # -------- Processing Block -------- #
         if requirements_ready:
-            st.markdown("### 🚦 All files uploaded, ready for processing!")
+            st.markdown(
+                "### 🚦 All files uploaded, ready for processing!"
+            )
 
             if st.button(
                 "🚀 RUN STAGE 1 TRANSFORMATION",
                 type="primary",
                 use_container_width=True,
             ):
-                transformation_start = time.perf_counter()
-
                 df_stage1, removed_duplicates = stage1_pipeline_1(df.copy())
                 df_stage1 = stage1_pipeline_2(df_stage1)
                 df_stage1 = stage1_pipeline_3(df_stage1)
@@ -283,176 +280,50 @@ if st.session_state.stage == "eplan":
                 df_stage1 = stage1_pipeline_27(df_stage1)
                 df_stage1 = stage1_pipeline_28(df_stage1, component_to_group)
                 df_stage1 = stage1_pipeline_29(df_stage1, df_original)
-
-                # ---------------------------------------------------------
-                # GALUTINIO FAILO ENDPOINT / WIRENO PATIKRA
-                # Funkcija yra tik informacinė ir duomenų nekeičia.
-                # ---------------------------------------------------------
-                endpoint_errors = validate_duplicate_endpoint_wirenos(
-                    df_stage1
-                )
-
-
-                st.markdown("### 🔎 Result Validation")
-
-                if endpoint_errors.empty:
-                    st.success(
-                        "✅ Galutiniame faile nerasta komponentų kontaktų, "
-                        "naudojamų su keliais skirtingais Wireno."
-                    )
-                else:
-                    st.warning(
-                        f"⚠️ Galutiniame faile rasta "
-                        f"{len(endpoint_errors)} kontaktų su keliais "
-                        "skirtingais Wireno."
-                    )
-
-                    st.dataframe(
-                        endpoint_errors,
-                        use_container_width=True,
-                        hide_index=True,
-                        height=min(
-                            500,
-                            80 + len(endpoint_errors) * 35,
-                        ),
-                    )
                 # ── ADD THIS SNIPPET TO CALCULATE AND DISPLAY -XPE TERMINALS ─────────
                 # Count rows where Line-Function is GNYE
                 gnyc_count = (df_stage1['Line-Function'] == 'GNYE').sum()
                 # Divide by 2 and round up
                 xpe_terminals = -(-gnyc_count // 2)
                 
-                group_counts = {
-                    group: len(symbols)
-                    for group, symbols in group_symbols.items()
-                }
+                # Display in Streamlit
+                st.markdown("### 🧩 ADV_WS_functions (after fix)")
+                st.dataframe(df_component_fixed, use_container_width=True, height=200)
 
-                sorted_group_counts = sorted(
-                    group_counts.items(),
-                    key=lambda item: (-item[1], item[0]),
+                st.markdown("### 🧩 ADV_WS group summary")
+                group_counts = {g: len(v) for g, v in group_symbols.items()}
+                summary_df = (
+                    pd.DataFrame([{"Group": g, "Count": c} for g, c in group_counts.items()])
+                      .sort_values(["Count", "Group"], ascending=[False, True])
+                      .reset_index(drop=True)
                 )
-
-                st.markdown(
-                    '<div class="result-section-title">'
-                    '════════════ ADV_WS GROUP SUMMARY ════════════'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-
-                if sorted_group_counts:
-                    max_group_length = max(
-                        len(str(group))
-                        for group, _ in sorted_group_counts
-                    )
-
-                    for group, count in sorted_group_counts:
-                        aligned_group = str(group).ljust(max_group_length)
-                        component_word = (
-                            "component"
-                            if count == 1
-                            else "components"
-                        )
-
-                        st.markdown(
-                            f'<div class="result-row">'
-                            f'{aligned_group} : {count} {component_word}'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-
-                st.markdown(
-                    '<div class="result-section-title">'
-                    '════════════ REQUIRED XPE TERMINALS ════════════'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
+                st.dataframe(summary_df, use_container_width=True, height=250)
+                
+                st.markdown("### Required Protective‐Earth (-XPE) Terminals")
                 st.metric("Number of -XPE terminals", xpe_terminals)
-                # ── Terminal Count Statistics ───────────────────────────
-                terminal_groups = {
-                    "X0100": [
-                        "-X0100:L3",
-                        "-X0100:N",
-                        "-X0100:230VL2",
-                        "-X0100:230VN2",
-                    ],
-                    "X0101": [
-                        "-X0101:230VL",
-                        "-X0101:230VN",
-                    ],
-                    "X0102": [
-                        "-X0102:24VDC",
-                        "-X0102:24VDC1",
-                        "-X0102:24VDC2",
-                        "-X0102:24VDC3",
-                        "-X0102:0VDC",
-                    ],
-                }
-
+                # ── Terminal Count Statistics ────────────────────────────────────────────────
+                terminal_list = [
+                    "-X0101:230VL", "-X0101:230VN", "-X0100:L3", "-X0100:230VL2",
+                    "-X0100:N", "-X0100:230VN2", "-X0102:0VDC", "-X0102:24VDC",
+                    "-X0102:24VDC1", "-X0102:24VDC2", "-X0102:24VDC3"
+                ]
+                # Count occurrences in Name or Name.1
                 counts = {}
-
-                for terminal_list in terminal_groups.values():
-                    for terminal in terminal_list:
-                        counts[terminal] = (
-                            (df_stage1["Name"] == terminal).sum()
-                            + (df_stage1["Name.1"] == terminal).sum()
-                        )
-
-                blocks_needed = {
-                    terminal: math.ceil(count / 6)
-                    for terminal, count in counts.items()
-                }
-
-                st.markdown(
-                    '<div class="result-section-title">'
-                    '════════════ TERMINAL BLOCKS REQUIRED ════════════'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-
-                max_terminal_length = max(
-                    len(terminal)
-                    for terminal_list in terminal_groups.values()
-                    for terminal in terminal_list
-                )
-
-                for group_name, terminal_list in terminal_groups.items():
-                    used_terminals = [
-                        terminal
-                        for terminal in terminal_list
-                        if counts.get(terminal, 0) > 0
-                    ]
-
-                    if not used_terminals:
-                        continue
-
-                    st.markdown(
-                        f'<div class="terminal-group-title">'
-                        f'════════════ {group_name} ════════════'
-                        f'</div>',
-                        unsafe_allow_html=True,
+                for term in terminal_list:
+                    counts[term] = (
+                            (df_stage1['Name'] == term).sum() +
+                            (df_stage1['Name.1'] == term).sum()
                     )
+                # Compute required terminal blocks (6 per block, round up)
 
-                    for terminal in used_terminals:
-                        count = counts[terminal]
-                        blocks = blocks_needed[terminal]
-                        block_word = "block" if blocks == 1 else "blocks"
-                        occurrence_word = (
-                            "occurrence"
-                            if count == 1
-                            else "occurrences"
-                        )
-                        aligned_terminal = terminal.ljust(
-                            max_terminal_length
-                        )
+                blocks_needed = {term: math.ceil(count / 6) for term, count in counts.items()}
 
-                        st.markdown(
-                            f'<div class="terminal-row">'
-                            f'{aligned_terminal} : '
-                            f'{count} {occurrence_word} '
-                            f'→ {blocks} {block_word}'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
+                # Display in UI
+                st.markdown("### 🔌 Terminal Blocks Required")
+                for term, blocks in blocks_needed.items():
+                    if counts[term] > 0:
+                        st.write(f"{term}: {counts[term]} occurrences → {blocks} block(s)")
+
 
                 # Prepare for editing and identify blank cells
                 df_stage1 = stage1_pipeline_14(df_stage1)
@@ -461,6 +332,9 @@ if st.session_state.stage == "eplan":
                 # Store in session state
                 st.session_state["stage1_data"] = df_stage1
                 st.session_state["blank_cells"] = blank_cells
+
+                st.markdown("### ✅ Stage 1 Transformation Result Preview")
+                st.dataframe(df_stage1.head(20), use_container_width=True, height=400)
 
                 # Show blank cell statistics
                 total_blank_cells = sum(len(rows) for rows in blank_cells.values())
