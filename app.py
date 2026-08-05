@@ -66,7 +66,7 @@ st.markdown("""
 .status-success {background: linear-gradient(135deg, #00d4aa 0%, #059669 100%); color: white; padding: 1rem; border-radius: 12px;}
 .status-info {background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); color: white; padding: 1rem; border-radius: 12px;}
 .status-warning {background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 1rem; border-radius: 12px;}
-.stMetric {background: linear-gradient(135deg, rgba(30,41,59,0.8) 0%, rgba(51,65,85,0.6) 100%); padding: 1rem; border-radius: 8px;}
+.stMetric {background: linear-gradient(135deg, rgba(71,85,105,0.72) 0%, rgba(100,116,139,0.58) 100%); padding: 1rem; border-radius: 8px;}
 .stButton > button {background: linear-gradient(135deg, #00d4aa 0%, #0ea5e9 100%); color: white; border-radius: 12px; padding: 0.75rem 2rem; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.3s;}
 .stButton > button:hover {transform: translateY(-2px);}
 .success-message {color: #22c55e; font-weight: 600; font-size: 0.9rem;}
@@ -329,13 +329,14 @@ if st.session_state.stage == "eplan":
                     for group, symbols in group_symbols.items()
                 }
 
-                all_groups_df = pd.DataFrame(
+                standard_groups_df = pd.DataFrame(
                     [
                         {
                             "Group": group,
                             "Components": count,
                         }
                         for group, count in group_counts.items()
+                        if "SWING" not in str(group).upper()
                     ]
                 )
 
@@ -350,9 +351,9 @@ if st.session_state.stage == "eplan":
                     ]
                 )
 
-                if not all_groups_df.empty:
-                    all_groups_df = (
-                        all_groups_df
+                if not standard_groups_df.empty:
+                    standard_groups_df = (
+                        standard_groups_df
                         .sort_values(
                             by=["Components", "Group"],
                             ascending=[False, True],
@@ -379,26 +380,26 @@ if st.session_state.stage == "eplan":
 
                 with all_groups_col:
                     st.markdown(
-                        '<div class="group-column-title">All Groups</div>',
+                        '<div class="group-column-title">Standard Groups</div>',
                         unsafe_allow_html=True,
                     )
 
-                    if all_groups_df.empty:
-                        st.info("No groups found.")
+                    if standard_groups_df.empty:
+                        st.info("No standard groups found.")
                     else:
                         st.dataframe(
-                            all_groups_df,
+                            standard_groups_df,
                             use_container_width=True,
                             hide_index=True,
                             height=min(
                                 500,
-                                40 + len(all_groups_df) * 35,
+                                40 + len(standard_groups_df) * 35,
                             ),
                         )
 
                 with swing_groups_col:
                     st.markdown(
-                        '<div class="group-column-title">Swing Groups</div>',
+                        '<div class="group-column-title">SWING Groups</div>',
                         unsafe_allow_html=True,
                     )
 
@@ -419,7 +420,7 @@ if st.session_state.stage == "eplan":
                     '<div class="section-heading">🛡️ Required XPE Terminals</div>',
                     unsafe_allow_html=True,
                 )
-                st.metric("Number of -XPE terminals", xpe_terminals)
+                st.metric("Required terminals", xpe_terminals)
                 # ── Terminal Count Statistics ───────────────────────────
                 terminal_groups = {
                     "X0100": [
