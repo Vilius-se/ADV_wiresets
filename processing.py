@@ -3987,3 +3987,165 @@ def validate_distribution_terminals(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     return result
+
+def validate_duplicate_endpoint_wirenos(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Suranda komponentų pajungimo taškus, kurie faile naudojami
+    su daugiau nei vienu skirtingu Wireno.
+
+    Pvz.:
+      -K1011:14 -> Wireno 24VDC
+      -K1011:14 -> Wireno 230VL
+
+    Funkcija failo nekeičia.
+    Ji tik grąžina rastų problemų lentelę.
+    """
+
+    result_columns = [
+        "Endpoint",
+        "Wirenos",
+        "Count",
+        "Example connections",
+        "Problem",
+    ]
+
+    required_columns = {
+        "Name",
+        "Name.1",
+        "Wireno",
+    }
+
+    if not required_columns.issubset(df.columns):
+        return pd.DataFrame(columns=result_columns)
+
+    source = df.copy().fillna("")
+
+    def clean(value):
+        value = str(value).strip()
+
+        if value.lower() in {
+            "",
+            "nan",
+            "none",
+            "null",
+        }:
+            return ""
+
+        return value
+
+    def designation(endpoint):
+        """
+        Pašalina vietos prefiksą.
+
+        Pvz.:
+        +L.1/-K1011:14 -> -K1011:14
+        """
+        endpoint = clean(endpoint)
+
+        if "/" in endpoint:
+            endpoint = endpoint.rsplit("/", 1)[-1]
+
+        return endpoint
+
+    def normalize_endpoint(endpoint):
+        endpoint = designation(endpoint).upper()
+        endpoint = re.sub(r"\s+", "", endpoint)
+        return endpoint
+
+    def normalize_wireno(value):
+        value = clean(value)
+
+        replacements = {
+            "24VDC.": "24VDC",
+            "24VDC1.": "24VDC1",
+            "24VDC2.": "24VDC2",
+            "24VDC3.": "24VDC3",
+            "0VDC.": "0VDC",
+        }
+
+        return replacements.get(value, value)
+
+    endpoint_data = {}
+
+    for _, row in source.iterrows():
+        wireno = normalize_wireno(
+            row.get("Wireno", "")
+        )
+
+        if not wireno:
+            continue
+
+        name = designation(
+            row.get("Name", "")
+        )
+
+        name_1 = designation(
+            row.get("Name.1", "")
+        )
+
+        for endpoint in (name, name_1):
+            normalized = normalize_endpoint(endpoint)
+
+            if not normalized:
+                continue
+
+            if normalized not in endpoint_data:
+                endpoint_data[normalized] = {
+                    "display": endpoint,
+                    "wirenos": set(),
+                    "connections": [],
+                }
+
+            endpoint_data[normalized]["wirenos"].add(
+                wireno
+            )
+
+            endpoint_data[normalized]["connections"].append(
+                f"{name} ↔ {name_1} [{wireno}]"
+            )
+
+    problems = []
+
+    for data in endpoint_data.values():
+        wirenos = sorted(data["wirenos"])
+
+        if len(wirenos) <= 1:
+            continue
+
+        examples = list(
+            dict.fromkeys(data["connections"])
+        )[:5]
+
+        problems.append({
+            "Endpoint": data["display"],
+            "Wirenos": ", ".join(wirenos),
+            "Count": len(wirenos),
+            "Example connections": " | ".join(examples),
+            "Problem": (
+                f"{data['display']} naudojamas su keliais "
+                f"skirtingais Wireno: {', '.join(wirenos)}"
+            ),
+        })
+
+    result = pd.DataFrame(
+        problems,
+        columns=result_columns,
+    )
+
+    if not result.empty:
+        result = (
+            result
+            .sort_values(
+                by=[
+                    "Count",
+                    "Endpoint",
+                ],
+                ascending=[
+                    False,
+                    True,
+                ],
+            )
+            .reset_index(drop=True)
+        )
+
+    return result
