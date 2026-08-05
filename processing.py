@@ -3862,32 +3862,36 @@ def validate_distribution_terminals(df: pd.DataFrame) -> pd.DataFrame:
 
         found_color = normalize_color(
             row.get("Line-Function", "")
+        ).upper()
         )
 
         # --------------------------------------------------
         # SPALVOS PATIKRA
         # --------------------------------------------------
-        if found_color != expected_color:
-            if found_color:
-                problem = (
-                    f"{wireno} spalva yra {found_color}, "
-                    f"bet turi būti {expected_color}"
-                )
-            else:
-                problem = (
-                    f"{wireno} spalva nenurodyta, "
-                    f"bet turi būti {expected_color}"
-                )
-
-            errors.append({
-                "Error type": "Wrong color",
-                "Wireno": wireno,
-                "Expected": expected_color,
-                "Found": found_color,
-                "Name": name,
-                "Name.1": name_1,
-                "Problem": problem,
-            })
+        # PE spalvų netikriname
+        if found_color not in ("GNYE", "PE"):
+        
+            if found_color != expected_color:
+                if found_color:
+                    problem = (
+                        f"{wireno} spalva yra {found_color}, "
+                        f"bet turi būti {expected_color}"
+                    )
+                else:
+                    problem = (
+                        f"{wireno} spalva nenurodyta, "
+                        f"bet turi būti {expected_color}"
+                    )
+        
+                errors.append({
+                    "Error type": "Wrong color",
+                    "Wireno": wireno,
+                    "Expected": expected_color,
+                    "Found": found_color,
+                    "Name": name,
+                    "Name.1": name_1,
+                    "Problem": problem,
+                })
 
         # --------------------------------------------------
         # TERMINALO PATIKRA
