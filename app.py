@@ -42,6 +42,7 @@ from processing import (
     stage2_pipeline_5,
     stage2_final_text_to_columns,
     validate_distribution_terminals,
+    validate_duplicate_endpoint_wirenos,
 )
 
 st.set_page_config(
@@ -193,6 +194,35 @@ if st.session_state.stage == "eplan":
                     height=min(
                         500,
                         80 + len(distribution_errors) * 35,
+                    ),
+                )
+
+        # ---------------------------------------------------------
+        # DUPLICATE ENDPOINT / WIRENO CHECK
+        # ---------------------------------------------------------
+        if uploaded_file is not None:
+            st.markdown("### 🔎 Duplicate Endpoint / Wireno Check")
+
+            endpoint_errors = validate_duplicate_endpoint_wirenos(
+                df_original
+            )
+
+            if endpoint_errors.empty:
+                st.success(
+                    "✅ Nerasta komponentų kontaktų, naudojamų su keliais skirtingais Wireno."
+                )
+            else:
+                st.error(
+                    f"❌ Rasta {len(endpoint_errors)} komponentų kontaktų su skirtingais Wireno."
+                )
+
+                st.dataframe(
+                    endpoint_errors,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(
+                        500,
+                        80 + len(endpoint_errors) * 35,
                     ),
                 )
 
