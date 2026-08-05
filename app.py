@@ -40,8 +40,8 @@ from processing import (
     stage2_pipeline_2,
     stage2_pipeline_4,
     stage2_pipeline_5,
-    stage2_final_text_to_columns
-
+    stage2_final_text_to_columns,
+    validate_distribution_terminals,
 )
 
 st.set_page_config(
@@ -121,13 +121,18 @@ if st.session_state.stage == "eplan":
             key="advwsfile"
         )
 
-        requirements_ready = uploaded_file is not None and uploaded_advws is not None
+        requirements_ready = (
+            uploaded_file is not None
+            and uploaded_advws is not None
+        )
 
         if uploaded_file is not None:
             short_filename = (
-                uploaded_file.name if len(uploaded_file.name) <= 20
+                uploaded_file.name
+                if len(uploaded_file.name) <= 20
                 else uploaded_file.name[:17] + "..."
             )
+
             try:
                 start_time = time.perf_counter()
                 df = pd.read_excel(uploaded_file)
@@ -138,31 +143,70 @@ if st.session_state.stage == "eplan":
                 st.stop()
 
             st.markdown(
-                '<div class="status-success">🔋 Main file uploaded! Waiting for component functions file.</div>',
+                '<div class="status-success">'
+                '🔋 Main file uploaded!'
+                '</div>',
                 unsafe_allow_html=True,
             )
-            st.markdown("### 📊 Main File Preview")
-            st.dataframe(df.head(10), use_container_width=True, height=350)
 
         if uploaded_advws is not None:
             try:
                 df_component = pd.read_excel(uploaded_advws)
             except Exception as e:
-                st.error(f"⚠️ SYSTEM ERROR with ADV_WS_functions: {e}")
+                st.error(
+                    f"⚠️ SYSTEM ERROR with ADV_WS_functions: {e}"
+                )
                 st.stop()
 
             st.markdown(
-                '<div class="status-success">✅ ADV_WS_functions file uploaded!</div>',
+                '<div class="status-success">'
+                '✅ ADV_WS_functions file uploaded!'
+                '</div>',
                 unsafe_allow_html=True,
             )
-            st.markdown("### 🧩 Component Functions Preview")
-            st.dataframe(df_component.head(10), use_container_width=True, height=200)
+
+        # ---------------------------------------------------------
+        # ORIGINALAUS FAILO TERMINALŲ IR SPALVŲ PATIKRA
+        # ---------------------------------------------------------
+        if uploaded_file is not None:
+            st.markdown("### 🔎 Distribution Terminal Check")
+
+            distribution_errors = validate_distribution_terminals(
+                df_original
+            )
+
+            if distribution_errors.empty:
+                st.success(
+                    "✅ X0100 / X0101 / X0102 terminalai ir "
+                    "paskirstymo grandinių spalvos yra tinkamos."
+                )
+            else:
+                st.error(
+                    f"❌ Rastos {len(distribution_errors)} "
+                    "paskirstymo grandinių problemos."
+                )
+
+                st.dataframe(
+                    distribution_errors,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(
+                        500,
+                        80 + len(distribution_errors) * 35,
+                    ),
+                )
 
         # -------- Processing Block -------- #
         if requirements_ready:
-            st.markdown("### 🚦 All files uploaded, ready for processing!")
+            st.markdown(
+                "### 🚦 All files uploaded, ready for processing!"
+            )
 
-        if st.button("🚀 RUN STAGE 1 TRANSFORMATION", type="primary"):
+            if st.button(
+                "🚀 RUN STAGE 1 TRANSFORMATION",
+                type="primary",
+                use_container_width=True,
+            ):
                 df_stage1, removed_duplicates = stage1_pipeline_1(df.copy())
                 df_stage1 = stage1_pipeline_2(df_stage1)
                 df_stage1 = stage1_pipeline_3(df_stage1)
