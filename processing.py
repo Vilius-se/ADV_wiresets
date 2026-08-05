@@ -3989,15 +3989,12 @@ def validate_distribution_terminals(df: pd.DataFrame) -> pd.DataFrame:
 
 def validate_duplicate_endpoint_wirenos(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Suranda komponentų pajungimo taškus, kurie faile naudojami
-    su daugiau nei vienu skirtingu Wireno.
+    Galutiniame faile suranda komponentų pajungimo taškus,
+    kurie naudojami su keliais skirtingais Wireno.
 
-    Pvz.:
-      -K1011:14 -> Wireno 24VDC
-      -K1011:14 -> Wireno 230VL
+    GNYE ir PE laidai netikrinami.
 
-    Funkcija failo nekeičia.
-    Ji tik grąžina rastų problemų lentelę.
+    Funkcija nieko nekeičia – tik grąžina problemų lentelę.
     """
 
     result_columns = [
@@ -4033,12 +4030,6 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame) -> pd.DataFrame:
         return value
 
     def designation(endpoint):
-        """
-        Pašalina vietos prefiksą.
-
-        Pvz.:
-        +L.1/-K1011:14 -> -K1011:14
-        """
         endpoint = clean(endpoint)
 
         if "/" in endpoint:
@@ -4064,12 +4055,27 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame) -> pd.DataFrame:
 
         return replacements.get(value, value)
 
+    def normalize_color(value):
+        return clean(value).upper()
+
     endpoint_data = {}
 
     for _, row in source.iterrows():
         wireno = normalize_wireno(
             row.get("Wireno", "")
         )
+
+        line_function = normalize_color(
+            row.get("Line-Function", "")
+        )
+
+        # PE laidų šiame tikrinime visai neliečiame
+        if line_function in {"GNYE", "PE"}:
+            continue
+
+        # Jei pats Wireno yra PE – taip pat praleidžiame
+        if wireno.upper() == "PE":
+            continue
 
         if not wireno:
             continue
@@ -4135,14 +4141,8 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame) -> pd.DataFrame:
         result = (
             result
             .sort_values(
-                by=[
-                    "Count",
-                    "Endpoint",
-                ],
-                ascending=[
-                    False,
-                    True,
-                ],
+                by=["Count", "Endpoint"],
+                ascending=[False, True],
             )
             .reset_index(drop=True)
         )
