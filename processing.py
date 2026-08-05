@@ -2046,37 +2046,46 @@ def stage1_pipeline_24(df):
 
 def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
     """
-    PE grandines paima iš originalaus EPLAN failo, todėl ankstesni pipeline
-    negali sugadinti PE Wireno, DaisyNo ar Line-Name.
+    PE grandines paima iš originalaus EPLAN failo.
 
-    Taisyklės:
-    - Ieškomos visos realios jungtys į -XPE.
-    - Atmetami visi kiti -X... terminalai, išskyrus -X92...
-    - Originalus Line-Name paliekamas.
-    - Originalus 1,0 / 1.0 pakeičiamas į 0,75.
-    - Jei originalus Line-Name tuščias:
-        -T81...                  -> 2,5
-        -K...                    -> 0,75
-        -T... išskyrus -T9...   -> 0,75
-        visa kita               -> 1,5
-    - Wireno visada PE.
-    - Line-Function visada GNYE.
-    - DaisyNo:
-        0,75 -> CONTROL
-        kita -> POWER
+    Atranka:
+    - Imamos tik realios jungtys į -XPE.
+    - Kontaktai su simboliu ⏚ atmetami.
+    - Iš -M... paliekami tik -M92...
+    - Iš -T... paliekami:
+        -T81...  -> 2,5 mm²
+        -T9...   -> 1,5 mm²
+        -T...011 -> 1,5 mm²
+      Kiti -T... atmetami.
+    - Iš -X... paliekami tik -X92...
+    - Kiti komponentai paliekami.
+
+    Storiai:
+    - Jei originale Line-Name nurodytas, jis paliekamas.
+    - 1,0 / 1.0 pakeičiama į 0,75.
+    - Jei storis nenurodytas:
+        -T81... -> 2,5
+        -T...   -> 1,5
+        -K...   -> 0,75
+        visa kita -> 1,5
+
+    Rezultatas:
+    - Wireno = PE
+    - Line-Function = GNYE
+    - DaisyNo = CONTROL, jei 0,75; kitu atveju POWER
     """
 
     df = df.copy().fillna("")
     source = df_original.copy().fillna("")
 
-    required = {"Name", "Name.1"}
-    if not required.issubset(df.columns):
+    required_columns = {"Name", "Name.1"}
+
+    if not required_columns.issubset(df.columns):
         return df.reset_index(drop=True)
 
-    if not required.issubset(source.columns):
+    if not required_columns.issubset(source.columns):
         return df.reset_index(drop=True)
 
-    # Originaliam failui pritaikome tik bendrą tekstų normalizavimą.
     source = stage1_pipeline_3(source)
 
     for column in ("Wireno", "Line-Name", "Line-Function", "DaisyNo"):
@@ -2090,11 +2099,6 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         return "" if value.lower() in {"nan", "none", "null"} else value
 
     def designation(endpoint):
-        """
-        Pašalina vietos prefiksą, jei toks yra:
-        +L.4/-M341:PE -> -M341:PE
-        +L.4/-XPE:PE -> -XPE:PE
-        """
         endpoint = clean(endpoint)
         return endpoint.rsplit("/", 1)[-1] if "/" in endpoint else endpoint
 
@@ -2106,12 +2110,27 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         return component_name(endpoint).upper() == "-XPE"
 
     def keep_component(endpoint):
+        endpoint = designation(endpoint).strip()
         component = component_name(endpoint).upper()
 
         if not component:
             return False
 
-        # Atmetami visi -X..., išskyrus -X92...
+        if "⏚" in endpoint:
+            return False
+
+        if component.startswith("-M"):
+            return component.startswith("-M92")
+
+        if component.startswith("-T81"):
+            return True
+
+        if component.startswith("-T9"):
+            return True
+
+        if component.startswith("-T"):
+            return bool(re.fullmatch(r"-T\d*011(?:\.\d+)?", component))
+
         if component.startswith("-X"):
             return component.startswith("-X92")
 
@@ -2119,11 +2138,7 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
     def normalize_line_name(value):
         value = clean(value)
-
-        if value in {"1,0", "1.0"}:
-            return "0,75"
-
-        return value
+        return "0,75" if value in {"1,0", "1.0"} else value
 
     def default_line_name(endpoint):
         component = component_name(endpoint).upper()
@@ -2131,16 +2146,15 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         if component.startswith("-T81"):
             return "2,5"
 
-        if component.startswith("-K"):
-            return "0,75"
+        if component.startswith("-T"):
+            return "1,5"
 
-        if component.startswith("-T") and not component.startswith("-T9"):
+        if component.startswith("-K"):
             return "0,75"
 
         return "1,5"
 
-    # Iš apdoroto df pašaliname visas senas PE / XPE eilutes.
-    processed_xpe_mask = df.apply(
+    processed_pe_mask = df.apply(
         lambda row: (
             is_xpe(row.get("Name", ""))
             or is_xpe(row.get("Name.1", ""))
@@ -2149,10 +2163,10 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         axis=1,
     )
 
-    result = df.loc[~processed_xpe_mask].copy()
+    result = df.loc[~processed_pe_mask].copy()
 
     generated_rows = []
-    seen_components = set()
+    seen_endpoints = set()
 
     for _, source_row in source.iterrows():
         name = clean(source_row.get("Name", ""))
@@ -2168,17 +2182,14 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         if not keep_component(component_endpoint):
             continue
 
-        # Vienam realiam PE kontaktui generuojama viena eilutė.
-        component_key = component_endpoint.upper()
+        endpoint_key = component_endpoint.upper()
 
-        if component_key in seen_components:
+        if endpoint_key in seen_endpoints:
             continue
 
-        seen_components.add(component_key)
+        seen_endpoints.add(endpoint_key)
 
-        line_name = normalize_line_name(
-            source_row.get("Line-Name", "")
-        )
+        line_name = normalize_line_name(source_row.get("Line-Name", ""))
 
         if not line_name:
             line_name = default_line_name(component_endpoint)
@@ -2186,7 +2197,6 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         daisy_no = "CONTROL" if line_name == "0,75" else "POWER"
 
         new_row = {column: "" for column in base_columns}
-
         new_row.update({
             "Name": component_endpoint,
             "Name.1": "-XPE:PE",
@@ -2200,10 +2210,7 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
     if generated_rows:
         result = pd.concat(
-            [
-                result,
-                pd.DataFrame(generated_rows, columns=base_columns),
-            ],
+            [result, pd.DataFrame(generated_rows, columns=base_columns)],
             ignore_index=True,
         )
 
