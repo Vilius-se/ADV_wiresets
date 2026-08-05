@@ -2139,13 +2139,54 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         value = clean(value)
         return "0,75" if value in {"1,0", "1.0"} else value
 
+    size_values = {
+        "0,5": 0.5,
+        "0,75": 0.75,
+        "1,5": 1.5,
+        "2,5": 2.5,
+        "4": 4.0,
+        "6": 6.0,
+        "10": 10.0,
+        "16": 16.0,
+        "25": 25.0,
+        "35": 35.0,
+        "50": 50.0,
+        "70": 70.0,
+        "95": 95.0,
+        "120": 120.0,
+    }
+
+    def largest_line_name(values):
+        values = [
+            normalize_line_name(value)
+            for value in values
+            if normalize_line_name(value)
+        ]
+
+        if not values:
+            return ""
+
+        valid_values = [
+            value
+            for value in values
+            if value in size_values
+        ]
+
+        if not valid_values:
+            return values[0]
+
+        return max(
+            valid_values,
+            key=lambda value: size_values[value],
+        )
+
     def related_line_name(endpoint):
         """
-        Jei PE eilutėje skerspjūvis nenurodytas, tikrina kitus laidus,
-        prijungtus prie to paties tikslaus kontakto.
+        Tikrina visus laidus, prijungtus prie to paties tikslaus kontakto.
 
-        Jei randami keli skerspjūviai, pasirenkamas didžiausias.
-        Viso komponento kontaktai netikrinami.
+        Į tikrinimą patenka ir pati PE eilutė, todėl, pavyzdžiui,
+        esant 0,75 ir 1,5 prie to paties kontakto pasirenkama 1,5.
+        Viso komponento kiti kontaktai netikrinami.
         """
         exact_endpoint = designation(endpoint).upper()
         found_sizes = []
@@ -2164,39 +2205,7 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
             if line_name:
                 found_sizes.append(line_name)
 
-        if not found_sizes:
-            return ""
-
-        size_values = {
-            "0,5": 0.5,
-            "0,75": 0.75,
-            "1,5": 1.5,
-            "2,5": 2.5,
-            "4": 4.0,
-            "6": 6.0,
-            "10": 10.0,
-            "16": 16.0,
-            "25": 25.0,
-            "35": 35.0,
-            "50": 50.0,
-            "70": 70.0,
-            "95": 95.0,
-            "120": 120.0,
-        }
-
-        valid_sizes = [
-            size
-            for size in found_sizes
-            if size in size_values
-        ]
-
-        if not valid_sizes:
-            return found_sizes[0]
-
-        return max(
-            valid_sizes,
-            key=lambda size: size_values[size],
-        )
+        return largest_line_name(found_sizes)
 
     def default_line_name(endpoint):
         component = component_name(endpoint).upper()
@@ -2247,10 +2256,17 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
         seen_endpoints.add(endpoint_key)
 
-        line_name = normalize_line_name(source_row.get("Line-Name", ""))
+        original_line_name = normalize_line_name(
+            source_row.get("Line-Name", "")
+        )
+        contact_line_name = related_line_name(component_endpoint)
 
-        if not line_name:
-            line_name = related_line_name(component_endpoint)
+        # Visada lyginamas originalios PE eilutės storis su kitais
+        # laidais prie to paties kontakto ir pasirenkamas didžiausias.
+        line_name = largest_line_name([
+            original_line_name,
+            contact_line_name,
+        ])
 
         if not line_name:
             line_name = default_line_name(component_endpoint)
