@@ -2888,7 +2888,7 @@ def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFra
     for wir, grp in df.groupby(df["Wireno"].astype(str), sort=False):
         idxs = list(grp.index)
 
-        TARGET_LF = {"RD", "DBU"}   # <-- čia gali pridėti daugiau
+        TARGET_LF = {"RD", "RD/WH", "DBU", "DBU/WH", "BK", "BU"}   # <-- čia gali pridėti daugiau
 
         lf_idxs = [i for i in idxs if lf_norm.get(i, "") in TARGET_LF]
         if len(lf_idxs) < 2:
