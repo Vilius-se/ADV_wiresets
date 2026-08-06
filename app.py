@@ -55,22 +55,194 @@ st.set_page_config(
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-.stApp {background: linear-gradient(135deg, #0f1419 0%, #1 50%, #0f1419 100%);}
-.main .block-container {padding-top: 2rem; padding-bottom: 2rem;}
-.stMarkdown, p {color: #e2e8f0;}
-.main-title {font-family: 'Inter', sans-serif; font-size: 3.5rem; font-weight: 700; text-align: center; margin-bottom: 0.5rem; background: linear-gradient(135deg, #00d4aa 0%, #00a693 30%, #0ea5e9 70%, #0284c7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; text-shadow: 0 4px 20px rgba(0, 212, 170, 0.3);}
-.subtitle {font-family: 'Inter', sans-serif; text-align: center; color: #94a3b8; font-size: 1.3rem; font-weight: 400; margin-bottom: 3rem;}
-.electric-line {height: 2px; background: linear-gradient(90deg, transparent 0%, #00d4aa 20%, #0ea5e9 50%, #00d4aa 80%, transparent 100%); margin: 1rem auto 2rem auto; width: 60%; box-shadow: 0 0 10px rgba(0, 212, 170, 0.5);}
-.upload-container {border: 2px dashed #334155; border-radius: 16px; padding: 3rem 2rem; text-align: center; background: linear-gradient(135deg, rgba(15, 23, 42, 0.8) 0%, rgba(30, 41, 59, 0.6) 100%); margin: 2rem 0; backdrop-filter: blur(10px); transition: all 0.3s ease;}
-.upload-container:hover {border-color: #00d4aa;}
-.status-success {background: linear-gradient(135deg, #00d4aa 0%, #059669 100%); color: white; padding: 1rem; border-radius: 12px;}
-.status-info {background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); color: white; padding: 1rem; border-radius: 12px;}
-.status-warning {background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 1rem; border-radius: 12px;}
-.stMetric {background: linear-gradient(135deg, rgba(71,85,105,0.72) 0%, rgba(100,116,139,0.58) 100%); padding: 1rem; border-radius: 8px;}
-.stButton > button {background: linear-gradient(135deg, #00d4aa 0%, #0ea5e9 100%); color: white; border-radius: 12px; padding: 0.75rem 2rem; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.3s;}
-.stButton > button:hover {transform: translateY(-2px);}
-.success-message {color: #22c55e; font-weight: 600; font-size: 0.9rem;}
-.blank-cell-highlight {background-color: #fef3c7 !important; border: 2px solid #f59e0b !important;}
+
+.stApp {
+    background: linear-gradient(135deg, #f8fafc 0%, #ffffff 50%, #f8fafc 100%);
+}
+
+.main .block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+
+.stMarkdown,
+.stMarkdown p,
+.stMarkdown li,
+.stMarkdown span {
+    color: #374151;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.stMarkdown h1,
+.stMarkdown h2,
+.stMarkdown h3,
+.stMarkdown h4 {
+    color: #2d3748 !important;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700 !important;
+}
+
+label,
+[data-testid="stFileUploader"] span,
+[data-testid="stFileUploader"] small,
+[data-testid="stFileUploader"] p,
+[data-testid="stWidgetLabel"] p {
+    color: #4b5563 !important;
+}
+
+[data-testid="stAlert"] p,
+[data-testid="stAlert"] span {
+    color: #374151 !important;
+    font-weight: 500;
+}
+
+[data-testid="stMetricLabel"] p,
+[data-testid="stMetricLabel"] div {
+    color: #374151 !important;
+    font-weight: 600;
+}
+
+[data-testid="stMetricValue"] div {
+    color: #2d3748 !important;
+}
+
+[data-testid="stDataFrame"] {
+    color: #374151 !important;
+}
+
+.main-title {
+    font-family: 'Inter', sans-serif;
+    font-size: 3.5rem;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(
+        135deg,
+        #00d4aa 0%,
+        #00a693 30%,
+        #0ea5e9 70%,
+        #0284c7 100%
+    );
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-shadow: 0 4px 20px rgba(0, 212, 170, 0.3);
+}
+
+.subtitle {
+    font-family: 'Inter', sans-serif;
+    text-align: center;
+    color: #64748b !important;
+    font-size: 1.3rem;
+    font-weight: 400;
+    margin-bottom: 3rem;
+}
+
+.electric-line {
+    height: 2px;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        #00d4aa 20%,
+        #0ea5e9 50%,
+        #00d4aa 80%,
+        transparent 100%
+    );
+    margin: 1rem auto 2rem auto;
+    width: 60%;
+    box-shadow: 0 0 10px rgba(0, 212, 170, 0.5);
+}
+
+.upload-container {
+    border: 2px dashed #64748b;
+    border-radius: 16px;
+    padding: 3rem 2rem;
+    text-align: center;
+    background: linear-gradient(
+        135deg,
+        rgba(241, 245, 249, 0.95) 0%,
+        rgba(226, 232, 240, 0.72) 100%
+    );
+    margin: 2rem 0;
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+}
+
+.upload-container:hover {
+    border-color: #00a693;
+}
+
+.status-success {
+    background: linear-gradient(135deg, #00d4aa 0%, #059669 100%);
+    color: white !important;
+    padding: 1rem;
+    border-radius: 12px;
+}
+
+.status-success *,
+.status-info *,
+.status-warning * {
+    color: white !important;
+}
+
+.status-info {
+    background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+    color: white !important;
+    padding: 1rem;
+    border-radius: 12px;
+}
+
+.status-warning {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    color: white !important;
+    padding: 1rem;
+    border-radius: 12px;
+}
+
+.stMetric {
+    background: linear-gradient(
+        135deg,
+        rgba(100, 116, 139, 0.42) 0%,
+        rgba(148, 163, 184, 0.32) 100%
+    );
+    padding: 1rem;
+    border-radius: 8px;
+}
+
+.stButton > button {
+    background: linear-gradient(135deg, #00d4aa 0%, #0ea5e9 100%);
+    color: white !important;
+    border-radius: 12px;
+    padding: 0.75rem 2rem;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    transition: all 0.3s;
+}
+
+.stButton > button * {
+    color: white !important;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px);
+}
+
+.success-message {
+    color: #15803d;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.blank-cell-highlight {
+    background-color: #fef3c7 !important;
+    border: 2px solid #f59e0b !important;
+}
+
 .section-heading {
     color: #2d3748 !important;
     font-family: 'Inter', sans-serif;
@@ -79,6 +251,7 @@ st.markdown("""
     margin: 1.15rem 0 0.55rem 0;
     padding: 0;
 }
+
 .group-column-title {
     color: #374151 !important;
     font-family: 'Inter', sans-serif;
@@ -87,16 +260,18 @@ st.markdown("""
     margin: 0 0 0.35rem 0;
     padding: 0;
 }
+
 .terminal-group-title {
-    color: #3f3f3f !important;
+    color: #374151 !important;
     font-family: monospace;
     font-weight: 700;
     margin: 0;
     padding: 0;
     line-height: 1.15;
 }
+
 .terminal-row {
-    color: #3f3f3f !important;
+    color: #4b5563 !important;
     font-family: monospace;
     font-weight: 500;
     margin: 0;
@@ -104,7 +279,16 @@ st.markdown("""
     line-height: 1.15;
     white-space: pre;
 }
-#MainMenu, footer, header {visibility: hidden;}
+
+.app-footer {
+    color: #64748b !important;
+}
+
+#MainMenu,
+footer,
+header {
+    visibility: hidden;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -663,7 +847,7 @@ elif st.session_state.stage == "komax":
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown("""
-<div style="text-align:center; padding:1rem 0; color:#64748b;">
+<div class="app-footer" style="text-align:center; padding:1rem 0;">
   🌱 Sustainable Data Solutions • ⚡ The Future is Electric
 </div>
 """, unsafe_allow_html=True)
