@@ -3990,13 +3990,20 @@ def validate_distribution_terminals(df: pd.DataFrame) -> pd.DataFrame:
 def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
     """
     Galutiniame faile suranda komponentų pajungimo taškus,
-    kurie naudojami su daugiau nei vienu skirtingu Wireno.
+    naudojamus su daugiau nei vienu skirtingu Wireno.
 
-    PE laidai šiame tikrinime visiškai ignoruojami:
-    - Line-Function = GNYE
-    - Line-Function = PE
-    - Wireno = PE
-    - jungtys į -XPE
+    Ignoruojama:
+    - Line-Function = GNYE;
+    - Line-Function = PE;
+    - Wireno = PE;
+    - visos jungtys į -XPE;
+    - tiksliai -X912;
+    - visi -X92... komponentai, pvz. -X921, -X923, -X928.
+
+    Svarbu:
+    - kontaktų tarpai NEŠALINAMI;
+    - -T901:0 V ir -T901:0V laikomi skirtingais kontaktais;
+    - puslapiniai Wireno, pvz. 90:03 ar 92:01, nėra ignoruojami.
 
     Funkcija nieko nekeičia.
     Ji tik grąžina rastų problemų lentelę.
@@ -4036,7 +4043,7 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
 
     def designation(endpoint):
         """
-        Pašalina vietos prefiksą.
+        Pašalina vietos prefiksą, bet nekeičia kontakto vidaus.
 
         Pvz.:
         +L.1/-K1011:14 -> -K1011:14
@@ -4050,16 +4057,12 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
 
     def normalize_endpoint(endpoint):
         """
-        Normalizuoja tikslų pajungimo tašką palyginimui.
+        Normalizuoja tik registrą ir kraštinius tarpus.
 
-        Pvz.:
-        -T901:0 V* ir -T901:0V*
-        laikomi tuo pačiu kontaktu.
+        Vidaus tarpai paliekami:
+        -T901:0 V != -T901:0V
         """
-        endpoint = designation(endpoint).upper()
-        endpoint = re.sub(r"\s+", "", endpoint)
-
-        return endpoint
+        return designation(endpoint).upper()
 
     def component_name(endpoint):
         """
@@ -4067,7 +4070,7 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
 
         Pvz.:
         -K1011:14 -> -K1011
-        -XPE:PE   -> -XPE
+        -X923:L3  -> -X923
         """
         endpoint = normalize_endpoint(endpoint)
 
@@ -4102,6 +4105,25 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
 
         return replacements.get(value, value)
 
+    def is_ignored_component(endpoint):
+        """
+        Ignoruojami terminalai, kuriuose teisėtai gali būti
+        keli skirtingi Wireno:
+        - tiksliai -X912;
+        - visi -X92... komponentai.
+        """
+        component = component_name(endpoint)
+
+        if component == "-X912":
+            return True
+
+        return bool(
+            re.fullmatch(
+                r"-X92\d+",
+                component,
+            )
+        )
+
     endpoint_data = {}
 
     for _, row in source.iterrows():
@@ -4121,22 +4143,18 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
             row.get("Name.1", "")
         )
 
-        # Tuščios grandinės netikrinamos.
         if not wireno:
             continue
 
-        # PE pagal Wireno netikrinamas.
         if wireno.upper() == "PE":
             continue
 
-        # PE pagal laido spalvą / funkciją netikrinamas.
         if line_function in {
             "GNYE",
             "PE",
         }:
             continue
 
-        # Visos jungtys į XPE taip pat netikrinamos.
         if (
             component_name(name) == "-XPE"
             or component_name(name_1) == "-XPE"
@@ -4149,13 +4167,15 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
             if not normalized:
                 continue
 
-            # Paties XPE kontakto niekada netikriname.
             if component_name(normalized) == "-XPE":
+                continue
+
+            if is_ignored_component(normalized):
                 continue
 
             if normalized not in endpoint_data:
                 endpoint_data[normalized] = {
-                    "display": endpoint,
+                    "display": designation(endpoint),
                     "wirenos": set(),
                     "connections": [],
                 }
@@ -4164,24 +4184,18 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
                 wireno
             )
 
-            connection_text = (
+            endpoint_data[normalized]["connections"].append(
                 f"{name} ↔ {name_1} [{wireno}]"
             )
-
-            endpoint_data[normalized][
-                "connections"
-            ].append(connection_text)
 
     problems = []
 
     for data in endpoint_data.values():
         wirenos = sorted(data["wirenos"])
 
-        # Vienas Wireno tam pačiam kontaktui yra normalu.
         if len(wirenos) <= 1:
             continue
 
-        # Pašalinami pasikartojantys pavyzdžiai.
         examples = list(
             dict.fromkeys(data["connections"])
         )[:5]
