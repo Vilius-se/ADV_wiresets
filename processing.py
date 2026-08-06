@@ -46,15 +46,117 @@ def stage1_pipeline_1(df: pd.DataFrame):
     return df, removed_duplicates
 
 def stage1_pipeline_2(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
     block_values = [
-        "cable", "Cable", "External", "GNYE", "Interal cable", "Internal Cable",
-        "internal cable", "Internal cable", "Power", "power"
+        "cable",
+        "Cable",
+        "External",
+        "GNYE",
+        "Interal cable",
+        "Internal Cable",
+        "internal cable",
+        "Internal cable",
+        "Power",
+        "power",
     ]
-    if 'Line-Function' in df.columns:
-        df = df[~df['Line-Function'].isin(block_values)]
-    mask_pe = ~df.astype(str).apply(lambda col: col.str.contains("PE", na=False)).any(axis=1)
-    df = df[mask_pe]
-    return df
+
+    # -------------------------------------------------
+    # Remove Cable / Power / External rows
+    # -------------------------------------------------
+    if "Line-Function" in df.columns:
+        df = df[
+            ~df["Line-Function"].isin(block_values)
+        ]
+
+    # -------------------------------------------------
+    # Remove PE rows
+    # -------------------------------------------------
+    mask_pe = ~df.astype(str).apply(
+        lambda col: col.str.contains(
+            "PE",
+            na=False,
+        )
+    ).any(axis=1)
+
+    df = df.loc[mask_pe]
+
+    # -------------------------------------------------
+    # Remove all rows where Name or Name.1 starts with "+"
+    # -------------------------------------------------
+    if {
+        "Name",
+        "Name.1",
+    }.issubset(df.columns):
+
+        mask_plus = (
+            df["Name"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.startswith("+")
+            |
+            df["Name.1"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.startswith("+")
+        )
+
+        df = df.loc[~mask_plus]
+
+    # -------------------------------------------------
+    # Remove empty internal -XT... links
+    #
+    # Examples:
+    # -XTB6:⏚ -> -XTB6:14
+    # -XTB7:⏚ -> -XTB7:15
+    #
+    # The row is removed only when:
+    # - both ends belong to the same -XT... component;
+    # - Line-Function is empty.
+    # -------------------------------------------------
+    if {
+        "Name",
+        "Name.1",
+        "Line-Function",
+    }.issubset(df.columns):
+
+        def base_component(value):
+            value = str(value).strip()
+
+            if ":" in value:
+                value = value.rsplit(":", 1)[0]
+
+            return value
+
+        name_base = df["Name"].apply(
+            base_component
+        )
+
+        name_1_base = df["Name.1"].apply(
+            base_component
+        )
+
+        line_function_empty = (
+            df["Line-Function"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            == ""
+        )
+
+        mask_internal_xt = (
+            name_base.str.startswith("-XT")
+            &
+            (name_base == name_1_base)
+            &
+            line_function_empty
+        )
+
+        df = df.loc[~mask_internal_xt]
+
+    return df.reset_index(drop=True)
 
 def stage1_pipeline_3(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
