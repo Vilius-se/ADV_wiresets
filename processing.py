@@ -1386,7 +1386,7 @@ def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
         },
 
         "main_line_name": "1,5",
-        "daisy_line_name": "0,75",
+        "daisy_line_name": "1,5",
 
         "source_modes": {
             "F903/L3": "wireno_origin",
