@@ -412,9 +412,6 @@ if st.session_state.stage == "eplan":
                         80 + len(distribution_errors) * 35,
                     ),
                 )
-    
-        # Distribution Terminal Check
-        distribution_errors = validate_distribution_terminals(df_original)      
         # ---------------------------------------------------------
         # MULTIPLE CONNECTION POINT CHECK
         # ---------------------------------------------------------
