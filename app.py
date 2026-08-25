@@ -43,6 +43,7 @@ from processing import (
     stage2_final_text_to_columns,
     validate_distribution_terminals,
     validate_duplicate_endpoint_wirenos,
+    validate_multiple_connection_points,
 )
 
 st.set_page_config(
@@ -411,7 +412,31 @@ if st.session_state.stage == "eplan":
                         80 + len(distribution_errors) * 35,
                     ),
                 )
-
+        # ---------------------------------------------------------
+        # MULTIPLE CONNECTION POINT CHECK
+        # ---------------------------------------------------------
+        
+        connection_point_errors = validate_multiple_connection_points(
+            df_original
+        )
+        
+        if not connection_point_errors.empty:
+            st.error(
+                f"❌ Connection Point Error — rasta "
+                f"{len(connection_point_errors)} Wireno su daugiau nei "
+                f"2 jungtimis tame pačiame pajungimo taške."
+            )
+        
+            st.dataframe(
+                connection_point_errors,
+                use_container_width=True,
+                hide_index=True,
+                height=min(
+                    400,
+                    60 + len(connection_point_errors) * 35,
+                ),
+            )
+        
         # -------- Processing Block -------- #
         if requirements_ready:
             st.markdown("### 🚦 All files uploaded, ready for processing!")
