@@ -4335,3 +4335,103 @@ def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
         )
 
     return result
+    
+def validate_multiple_connection_points(    df: pd.DataFrame,) -> pd.DataFrame:
+    """
+    Tikrina numeruotų laidų pajungimo taškus.
+
+    Klaida rodoma, kai:
+    - Wireno yra numeruotas laidas, pvz. 141:15, 90:03, 431:06;
+    - tas pats Endpoint tame pačiame Wireno panaudotas daugiau nei 2 kartus.
+
+    Funkcija nieko nekeičia.
+    Grąžina tik probleminių Wireno sąrašą.
+    """
+
+    if not {
+        "Name",
+        "Name.1",
+        "Wireno",
+    }.issubset(df.columns):
+        return pd.DataFrame(
+            columns=["Wireno"]
+        )
+
+    source = df.copy().fillna("")
+
+    def clean(value):
+        value = str(value).strip()
+
+        if value.lower() in {
+            "",
+            "nan",
+            "none",
+            "null",
+        }:
+            return ""
+
+        return value
+
+    def is_numbered_wireno(value):
+        value = clean(value)
+
+        return bool(
+            re.fullmatch(
+                r"\d+:\d+",
+                value,
+            )
+        )
+
+    endpoint_data = {}
+
+    for _, row in source.iterrows():
+
+        wireno = clean(
+            row.get("Wireno", "")
+        )
+
+        # Tikrinami tik numeruoti laidai
+        if not is_numbered_wireno(wireno):
+            continue
+
+        name = clean(
+            row.get("Name", "")
+        )
+
+        name_1 = clean(
+            row.get("Name.1", "")
+        )
+
+        if not name or not name_1:
+            continue
+
+        for endpoint in (name, name_1):
+
+            key = (
+                wireno,
+                endpoint,
+            )
+
+            if key not in endpoint_data:
+                endpoint_data[key] = 0
+
+            endpoint_data[key] += 1
+
+    problem_wirenos = set()
+
+    for (
+        wireno,
+        endpoint,
+    ), count in endpoint_data.items():
+
+        if count > 2:
+            problem_wirenos.add(
+                wireno
+            )
+
+    result = pd.DataFrame(
+        sorted(problem_wirenos),
+        columns=["Wireno"],
+    )
+
+    return result.reset_index(drop=True)
