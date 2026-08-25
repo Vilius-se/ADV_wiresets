@@ -415,27 +415,29 @@ if st.session_state.stage == "eplan":
         # ---------------------------------------------------------
         # MULTIPLE CONNECTION POINT CHECK
         # ---------------------------------------------------------
-        
-        connection_point_errors = validate_multiple_connection_points(
-            df_original
-        )
-        
-        if not connection_point_errors.empty:
-            st.error(
-                f"❌ Connection Point Error — rasta "
-                f"{len(connection_point_errors)} Wireno su daugiau nei "
-                f"2 jungtimis tame pačiame pajungimo taške."
+        if uploaded_file is not None:
+
+            connection_point_errors = validate_multiple_connection_points(
+                df_original
             )
-        
-            st.dataframe(
-                connection_point_errors,
-                use_container_width=True,
-                hide_index=True,
-                height=min(
-                    400,
-                    60 + len(connection_point_errors) * 35,
-                ),
-            )
+
+            # Rodome tik tada, jei rasta klaidų
+            if not connection_point_errors.empty:
+                st.error(
+                    f"❌ Connection Point Error — rasta "
+                    f"{len(connection_point_errors)} Wireno su daugiau nei "
+                    f"2 jungtimis tame pačiame pajungimo taške."
+                )
+
+                st.dataframe(
+                    connection_point_errors,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(
+                        400,
+                        60 + len(connection_point_errors) * 35,
+                    ),
+                )
         
         # -------- Processing Block -------- #
         if requirements_ready:
