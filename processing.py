@@ -4394,6 +4394,14 @@ def validate_multiple_connection_points(    df: pd.DataFrame,) -> pd.DataFrame:
         if not is_numbered_wireno(wireno):
             continue
 
+        # Ignoruoti visus 9x:xx
+        if re.fullmatch(r"9\d:\d+", wireno):
+            continue
+
+        # Ignoruoti 631:01
+        if wireno == "631:01":
+            continue
+        
         name = clean(
             row.get("Name", "")
         )
