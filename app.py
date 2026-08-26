@@ -354,6 +354,9 @@ if st.session_state.stage == "eplan":
 
             try:
                 df = pd.read_excel(uploaded_file)
+                # Paliekami tik pirmi 8 stulpeliai (A:H)
+                df = df.iloc[:, :8].copy()
+                # Originalas tolimesnėms patikroms / pipeline'ams
                 df_original = df.copy()
             except Exception as e:
                 st.error(f"⚠️ SYSTEM ERROR: {e}")
