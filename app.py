@@ -451,303 +451,304 @@ if st.session_state.stage == "eplan":
                 type="primary",
                 use_container_width=True,
             ):
-                transformation_start = time.perf_counter()
+                with st.spinner("⚙️ Processing wireset... Please wait."):
+                    transformation_start = time.perf_counter()
 
-                df_stage1, removed_duplicates = stage1_pipeline_1(df.copy())
-                df_stage1 = stage1_pipeline_2(df_stage1)
-                df_stage1 = stage1_pipeline_3(df_stage1)
-                df_stage1 = stage1_pipeline_4(df_stage1)
-                df_stage1 = stage1_pipeline_5(df_stage1)
-                df_stage1 = stage1_pipeline_6(df_stage1)
-                df_stage1 = stage1_pipeline_7(df_stage1)
-                df_stage1 = stage1_pipeline_8(df_stage1)
-                df_stage1 = stage1_pipeline_9(df_stage1)
-                # --- FIX EPLAN STRUCTURE (=POWER+X-F128 → =POWER-F128) ---
-                df_component_fixed = df_component.copy()
-                col_name = df_component_fixed.columns[0]
+                    df_stage1, removed_duplicates = stage1_pipeline_1(df.copy())
+                    df_stage1 = stage1_pipeline_2(df_stage1)
+                    df_stage1 = stage1_pipeline_3(df_stage1)
+                    df_stage1 = stage1_pipeline_4(df_stage1)
+                    df_stage1 = stage1_pipeline_5(df_stage1)
+                    df_stage1 = stage1_pipeline_6(df_stage1)
+                    df_stage1 = stage1_pipeline_7(df_stage1)
+                    df_stage1 = stage1_pipeline_8(df_stage1)
+                    df_stage1 = stage1_pipeline_9(df_stage1)
+                    # --- FIX EPLAN STRUCTURE (=POWER+X-F128 → =POWER-F128) ---
+                    df_component_fixed = df_component.copy()
+                    col_name = df_component_fixed.columns[0]
 
-                df_component_fixed[col_name] = (
-                    df_component_fixed[col_name]
-                    .astype(str)
-                    .str.strip()
-                    .apply(lambda x: re.sub(r'^(=[^+\-]+)\+[^-]*', r'\1', x) if isinstance(x, str) and x.strip().startswith("=") else x)
-                )
-                group_symbols = parse_component_functions(df_component_fixed)
-                # Convert group_symbols (GROUP -> [components])
-                # into component_to_group (component -> GROUP)
-                component_to_group = {}
-                for group, symbols in group_symbols.items():
-                    for sym in symbols:
-                        component_to_group[sym] = group.upper()
-                df_stage1 = stage1_pipeline_16(df_stage1)
-                df_stage1 = stage1_pipeline_7_1(df_stage1)
-                df_stage1 = stage1_pipeline_11(df_stage1, group_symbols)
-                df_stage1 = stage1_pipeline_12(df_stage1, group_symbols)
-                df_stage1 = stage1_pipeline_13(df_stage1)
-                df_stage1 = stage1_pipeline_15(df_stage1)
-                df_stage1 = stage1_pipeline_17(df_stage1)
-                df_stage1 = stage1_pipeline_18(df_stage1)
-                df_stage1 = stage1_pipeline_20(df_stage1)
-                df_stage1 = stage1_pipeline_21(df_stage1)
-                df_stage1 = stage1_pipeline_22(df_stage1)
-                df_stage1 = stage1_pipeline_24(df_stage1)
-                df_stage1 = stage1_pipeline_25(df_stage1, df_original)
-                df_stage1 = stage1_pipeline_26(df_stage1)
-                df_stage1 = stage1_pipeline_27(df_stage1)
-                df_stage1 = stage1_pipeline_28(df_stage1, component_to_group)
-                df_stage1 = stage1_pipeline_29(df_stage1, df_original)
-
-                # ---------------------------------------------------------
-                # GALUTINIO FAILO ENDPOINT / WIRENO PATIKRA
-                # Funkcija yra tik informacinė ir duomenų nekeičia.
-                # ---------------------------------------------------------
-                endpoint_errors = validate_duplicate_endpoint_wirenos(
-                    df_stage1
-                )
-
-
-                st.markdown(
-                    '<div class="section-heading">🔎 Result Validation</div>',
-                    unsafe_allow_html=True,
-                )
-
-                if endpoint_errors.empty:
-                    st.success(
-                        "✅ Galutiniame faile nerasta komponentų kontaktų, "
-                        "naudojamų su keliais skirtingais Wireno."
+                    df_component_fixed[col_name] = (
+                        df_component_fixed[col_name]
+                        .astype(str)
+                        .str.strip()
+                        .apply(lambda x: re.sub(r'^(=[^+\-]+)\+[^-]*', r'\1', x) if isinstance(x, str) and x.strip().startswith("=") else x)
                     )
-                else:
-                    st.warning(
-                        f"⚠️ Galutiniame faile rasta "
-                        f"{len(endpoint_errors)} kontaktų su keliais "
-                        "skirtingais Wireno."
+                    group_symbols = parse_component_functions(df_component_fixed)
+                    # Convert group_symbols (GROUP -> [components])
+                    # into component_to_group (component -> GROUP)
+                    component_to_group = {}
+                    for group, symbols in group_symbols.items():
+                        for sym in symbols:
+                            component_to_group[sym] = group.upper()
+                    df_stage1 = stage1_pipeline_16(df_stage1)
+                    df_stage1 = stage1_pipeline_7_1(df_stage1)
+                    df_stage1 = stage1_pipeline_11(df_stage1, group_symbols)
+                    df_stage1 = stage1_pipeline_12(df_stage1, group_symbols)
+                    df_stage1 = stage1_pipeline_13(df_stage1)
+                    df_stage1 = stage1_pipeline_15(df_stage1)
+                    df_stage1 = stage1_pipeline_17(df_stage1)
+                    df_stage1 = stage1_pipeline_18(df_stage1)
+                    df_stage1 = stage1_pipeline_20(df_stage1)
+                    df_stage1 = stage1_pipeline_21(df_stage1)
+                    df_stage1 = stage1_pipeline_22(df_stage1)
+                    df_stage1 = stage1_pipeline_24(df_stage1)
+                    df_stage1 = stage1_pipeline_25(df_stage1, df_original)
+                    df_stage1 = stage1_pipeline_26(df_stage1)
+                    df_stage1 = stage1_pipeline_27(df_stage1)
+                    df_stage1 = stage1_pipeline_28(df_stage1, component_to_group)
+                    df_stage1 = stage1_pipeline_29(df_stage1, df_original)
+
+                    # ---------------------------------------------------------
+                    # GALUTINIO FAILO ENDPOINT / WIRENO PATIKRA
+                    # Funkcija yra tik informacinė ir duomenų nekeičia.
+                    # ---------------------------------------------------------
+                    endpoint_errors = validate_duplicate_endpoint_wirenos(
+                        df_stage1
                     )
 
-                    st.dataframe(
-                        endpoint_errors,
-                        use_container_width=True,
-                        hide_index=True,
-                        height=min(
-                            500,
-                            80 + len(endpoint_errors) * 35,
-                        ),
+
+                    st.markdown(
+                        '<div class="section-heading">🔎 Result Validation</div>',
+                        unsafe_allow_html=True,
                     )
-                # ── ADD THIS SNIPPET TO CALCULATE AND DISPLAY -XPE TERMINALS ─────────
-                # Count rows where Line-Function is GNYE
-                gnyc_count = (df_stage1['Line-Function'] == 'GNYE').sum()
-                # Divide by 2 and round up
-                xpe_terminals = -(-gnyc_count // 2)
+
+                    if endpoint_errors.empty:
+                        st.success(
+                            "✅ Galutiniame faile nerasta komponentų kontaktų, "
+                            "naudojamų su keliais skirtingais Wireno."
+                        )
+                    else:
+                        st.warning(
+                            f"⚠️ Galutiniame faile rasta "
+                            f"{len(endpoint_errors)} kontaktų su keliais "
+                            "skirtingais Wireno."
+                        )
+
+                        st.dataframe(
+                            endpoint_errors,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=min(
+                                500,
+                                80 + len(endpoint_errors) * 35,
+                            ),
+                        )
+                    # ── ADD THIS SNIPPET TO CALCULATE AND DISPLAY -XPE TERMINALS ─────────
+                    # Count rows where Line-Function is GNYE
+                    gnyc_count = (df_stage1['Line-Function'] == 'GNYE').sum()
+                    # Divide by 2 and round up
+                    xpe_terminals = -(-gnyc_count // 2)
                 
-                group_counts = {
-                    group: len(symbols)
-                    for group, symbols in group_symbols.items()
-                }
+                    group_counts = {
+                        group: len(symbols)
+                        for group, symbols in group_symbols.items()
+                    }
 
-                standard_groups_df = pd.DataFrame(
-                    [
-                        {
-                            "Group": group,
-                            "Components": count,
-                        }
-                        for group, count in group_counts.items()
-                        if "SWING" not in str(group).upper()
-                    ]
-                )
-
-                swing_groups_df = pd.DataFrame(
-                    [
-                        {
-                            "Group": group,
-                            "Components": count,
-                        }
-                        for group, count in group_counts.items()
-                        if "SWING" in str(group).upper()
-                    ]
-                )
-
-                if not standard_groups_df.empty:
-                    standard_groups_df = (
-                        standard_groups_df
-                        .sort_values(
-                            by=["Components", "Group"],
-                            ascending=[False, True],
-                        )
-                        .reset_index(drop=True)
+                    standard_groups_df = pd.DataFrame(
+                        [
+                            {
+                                "Group": group,
+                                "Components": count,
+                            }
+                            for group, count in group_counts.items()
+                            if "SWING" not in str(group).upper()
+                        ]
                     )
 
-                if not swing_groups_df.empty:
-                    swing_groups_df = (
-                        swing_groups_df
-                        .sort_values(
-                            by=["Components", "Group"],
-                            ascending=[False, True],
-                        )
-                        .reset_index(drop=True)
+                    swing_groups_df = pd.DataFrame(
+                        [
+                            {
+                                "Group": group,
+                                "Components": count,
+                            }
+                            for group, count in group_counts.items()
+                            if "SWING" in str(group).upper()
+                        ]
                     )
 
-                st.markdown(
-                    '<div class="section-heading">🧩 ADV_WS Group Summary</div>',
-                    unsafe_allow_html=True,
-                )
+                    if not standard_groups_df.empty:
+                        standard_groups_df = (
+                            standard_groups_df
+                            .sort_values(
+                                by=["Components", "Group"],
+                                ascending=[False, True],
+                            )
+                            .reset_index(drop=True)
+                        )
 
-                all_groups_col, swing_groups_col = st.columns(2)
+                    if not swing_groups_df.empty:
+                        swing_groups_df = (
+                            swing_groups_df
+                            .sort_values(
+                                by=["Components", "Group"],
+                                ascending=[False, True],
+                            )
+                            .reset_index(drop=True)
+                        )
 
-                with all_groups_col:
                     st.markdown(
-                        '<div class="group-column-title">Standard Groups</div>',
+                        '<div class="section-heading">🧩 ADV_WS Group Summary</div>',
                         unsafe_allow_html=True,
                     )
 
-                    if standard_groups_df.empty:
-                        st.info("No standard groups found.")
-                    else:
-                        st.dataframe(
-                            standard_groups_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            height=min(
-                                500,
-                                40 + len(standard_groups_df) * 35,
-                            ),
+                    all_groups_col, swing_groups_col = st.columns(2)
+
+                    with all_groups_col:
+                        st.markdown(
+                            '<div class="group-column-title">Standard Groups</div>',
+                            unsafe_allow_html=True,
                         )
 
-                with swing_groups_col:
+                        if standard_groups_df.empty:
+                            st.info("No standard groups found.")
+                        else:
+                            st.dataframe(
+                                standard_groups_df,
+                                use_container_width=True,
+                                hide_index=True,
+                                height=min(
+                                    500,
+                                    40 + len(standard_groups_df) * 35,
+                                ),
+                            )
+
+                    with swing_groups_col:
+                        st.markdown(
+                            '<div class="group-column-title">SWING Groups</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                        if swing_groups_df.empty:
+                            st.info("No SWING groups found.")
+                        else:
+                            st.dataframe(
+                                swing_groups_df,
+                                use_container_width=True,
+                                hide_index=True,
+                                height=min(
+                                    500,
+                                    40 + len(swing_groups_df) * 35,
+                                ),
+                            )
+
                     st.markdown(
-                        '<div class="group-column-title">SWING Groups</div>',
+                        '<div class="section-heading">🛡️ Required XPE Terminals</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.metric("Required terminals", xpe_terminals)
+                    # ── Terminal Count Statistics ───────────────────────────
+                    terminal_groups = {
+                        "X0100": [
+                            "-X0100:L3",
+                            "-X0100:N",
+                            "-X0100:230VL2",
+                            "-X0100:230VN2",
+                        ],
+                        "X0101": [
+                            "-X0101:230VL",
+                            "-X0101:230VN",
+                        ],
+                        "X0102": [
+                            "-X0102:24VDC",
+                            "-X0102:24VDC1",
+                            "-X0102:24VDC2",
+                            "-X0102:24VDC3",
+                            "-X0102:0VDC",
+                        ],
+                    }
+
+                    counts = {}
+
+                    for terminal_list in terminal_groups.values():
+                        for terminal in terminal_list:
+                            counts[terminal] = (
+                                (df_stage1["Name"] == terminal).sum()
+                                + (df_stage1["Name.1"] == terminal).sum()
+                            )
+
+                    blocks_needed = {
+                        terminal: math.ceil(count / 6)
+                        for terminal, count in counts.items()
+                    }
+
+                    st.markdown(
+                        '<div class="section-heading">🔌 Terminal Blocks Required</div>',
                         unsafe_allow_html=True,
                     )
 
-                    if swing_groups_df.empty:
-                        st.info("No SWING groups found.")
-                    else:
-                        st.dataframe(
-                            swing_groups_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            height=min(
-                                500,
-                                40 + len(swing_groups_df) * 35,
-                            ),
-                        )
-
-                st.markdown(
-                    '<div class="section-heading">🛡️ Required XPE Terminals</div>',
-                    unsafe_allow_html=True,
-                )
-                st.metric("Required terminals", xpe_terminals)
-                # ── Terminal Count Statistics ───────────────────────────
-                terminal_groups = {
-                    "X0100": [
-                        "-X0100:L3",
-                        "-X0100:N",
-                        "-X0100:230VL2",
-                        "-X0100:230VN2",
-                    ],
-                    "X0101": [
-                        "-X0101:230VL",
-                        "-X0101:230VN",
-                    ],
-                    "X0102": [
-                        "-X0102:24VDC",
-                        "-X0102:24VDC1",
-                        "-X0102:24VDC2",
-                        "-X0102:24VDC3",
-                        "-X0102:0VDC",
-                    ],
-                }
-
-                counts = {}
-
-                for terminal_list in terminal_groups.values():
-                    for terminal in terminal_list:
-                        counts[terminal] = (
-                            (df_stage1["Name"] == terminal).sum()
-                            + (df_stage1["Name.1"] == terminal).sum()
-                        )
-
-                blocks_needed = {
-                    terminal: math.ceil(count / 6)
-                    for terminal, count in counts.items()
-                }
-
-                st.markdown(
-                    '<div class="section-heading">🔌 Terminal Blocks Required</div>',
-                    unsafe_allow_html=True,
-                )
-
-                max_terminal_length = max(
-                    len(terminal)
-                    for terminal_list in terminal_groups.values()
-                    for terminal in terminal_list
-                )
-
-                for group_name, terminal_list in terminal_groups.items():
-                    used_terminals = [
-                        terminal
+                    max_terminal_length = max(
+                        len(terminal)
+                        for terminal_list in terminal_groups.values()
                         for terminal in terminal_list
-                        if counts.get(terminal, 0) > 0
-                    ]
-
-                    if not used_terminals:
-                        continue
-
-                    st.markdown(
-                        f'<div class="terminal-group-title">'
-                        f'════════════ {group_name} ════════════'
-                        f'</div>',
-                        unsafe_allow_html=True,
                     )
 
-                    for terminal in used_terminals:
-                        count = counts[terminal]
-                        blocks = blocks_needed[terminal]
-                        block_word = "block" if blocks == 1 else "blocks"
-                        occurrence_word = (
-                            "occurrence"
-                            if count == 1
-                            else "occurrences"
-                        )
-                        aligned_terminal = terminal.ljust(
-                            max_terminal_length
-                        )
+                    for group_name, terminal_list in terminal_groups.items():
+                        used_terminals = [
+                            terminal
+                            for terminal in terminal_list
+                            if counts.get(terminal, 0) > 0
+                        ]
+
+                        if not used_terminals:
+                            continue
 
                         st.markdown(
-                            f'<div class="terminal-row">'
-                            f'{aligned_terminal} : '
-                            f'{count} {occurrence_word} '
-                            f'→ {blocks} {block_word}'
+                            f'<div class="terminal-group-title">'
+                            f'════════════ {group_name} ════════════'
                             f'</div>',
                             unsafe_allow_html=True,
                         )
 
-                # Prepare for editing and identify blank cells
-                df_stage1 = stage1_pipeline_14(df_stage1)
-                blank_cells = identify_blank_cells(df_stage1)
+                        for terminal in used_terminals:
+                            count = counts[terminal]
+                            blocks = blocks_needed[terminal]
+                            block_word = "block" if blocks == 1 else "blocks"
+                            occurrence_word = (
+                                "occurrence"
+                                if count == 1
+                                else "occurrences"
+                            )
+                            aligned_terminal = terminal.ljust(
+                                max_terminal_length
+                            )
 
-                # Store in session state
-                st.session_state["stage1_data"] = df_stage1
-                st.session_state["blank_cells"] = blank_cells
+                            st.markdown(
+                                f'<div class="terminal-row">'
+                                f'{aligned_terminal} : '
+                                f'{count} {occurrence_word} '
+                                f'→ {blocks} {block_word}'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
 
-                # Show blank cell statistics
-                total_blank_cells = sum(len(rows) for rows in blank_cells.values())
-                total_rows = df_stage1.shape[0]
-                total_cols = df_stage1.shape[1]
+                    # Prepare for editing and identify blank cells
+                    df_stage1 = stage1_pipeline_14(df_stage1)
+                    blank_cells = identify_blank_cells(df_stage1)
 
-                st.markdown(
-                    '<div class="section-heading">📊 Data Overview</div>',
-                    unsafe_allow_html=True,
-                )
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("🔢 Total Rows", f"{total_rows:,}")
-                c2.metric("📋 Columns", f"{total_cols}")
-                c3.metric("⚠️ Blank Cells", f"{total_blank_cells:,}")
-                c4.metric("🗑️ Removed Duplicates", f"{removed_duplicates}")
+                    # Store in session state
+                    st.session_state["stage1_data"] = df_stage1
+                    st.session_state["blank_cells"] = blank_cells
 
-                if total_blank_cells > 0:
+                    # Show blank cell statistics
+                    total_blank_cells = sum(len(rows) for rows in blank_cells.values())
+                    total_rows = df_stage1.shape[0]
+                    total_cols = df_stage1.shape[1]
+
                     st.markdown(
-                        f'<div class="status-warning">⚠️ **{total_blank_cells}** blank cells detected across **{len(blank_cells)}** columns. Please fill them in the editor below.</div>',
+                        '<div class="section-heading">📊 Data Overview</div>',
                         unsafe_allow_html=True,
                     )
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("🔢 Total Rows", f"{total_rows:,}")
+                    c2.metric("📋 Columns", f"{total_cols}")
+                    c3.metric("⚠️ Blank Cells", f"{total_blank_cells:,}")
+                    c4.metric("🗑️ Removed Duplicates", f"{removed_duplicates}")
+
+                    if total_blank_cells > 0:
+                        st.markdown(
+                            f'<div class="status-warning">⚠️ **{total_blank_cells}** blank cells detected across **{len(blank_cells)}** columns. Please fill them in the editor below.</div>',
+                            unsafe_allow_html=True,
+                        )
 
     # -------- Blank cell editor & download block -------- #
     if "stage1_data" in st.session_state and st.session_state["stage1_data"] is not None:
