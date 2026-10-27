@@ -4405,9 +4405,9 @@ def restore_fan_connections(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.D
                 problems.append(f"{fan}: {pin} terminalas nenustatytas vienareiksmiskai")
                 continue
             selected[pin] = candidates[0]
-        pe = [(end, dest, row) for end, dest, row in pins.get("PE", []) if dest.upper().startswith("-XPE:")]
+        pe = [(end, dest, row) for end, dest, row in pins.get("PE", []) if dest.strip()]
         if len({(end.upper(), dest.upper()) for end, dest, _ in pe}) != 1:
-            problems.append(f"{fan}: PE jungtis su XPE nenustatyta vienareiksmiskai")
+            problems.append(f"{fan}: PE jungtis originale nenustatyta vienareiksmiskai")
         if len(selected) != 2 or not pe:
             continue
         lterm = terminal_re.fullmatch(selected["L"][1]).group(1).upper()
