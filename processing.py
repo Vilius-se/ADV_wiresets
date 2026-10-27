@@ -1977,80 +1977,8 @@ def stage1_pipeline_21(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def stage1_pipeline_22(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Stage 1 Pipeline 22 – Handle ventilator components and append VENTS rows.
-    Only considers M_PREFS and X_PREFS entries that end with ':N'.
-    Special case: when has_k924 is True, map '-M925:N' to '-X924:N'.
-    """
-    df = df.copy()
-    # Flags
-    has_k924 = df[['Name', 'Name.1']].apply(lambda col: col.str.startswith('-K924', na=False)).any().any()
-    has_vnl2 = df['Wireno'].astype(str).str.contains('230VN2|230VL2', na=False).any()
-
-    # Prefix lists
-    M_PREFS = ['-M923:', '-M924:', '-M925:']
-    X_PREFS = ['-X923:', '-X924:', '-X927:', '-X928:']
-
-    # Gather matching symbols that end with ':N'
-    m_syms = {
-        val for col in ['Name', 'Name.1']
-        for val in df[col].astype(str)
-        for p in M_PREFS
-        if val.startswith(p) and val.endswith(':N')
-    }
-    x_syms = {
-        val for col in ['Name', 'Name.1']
-        for val in df[col].astype(str)
-        for p in X_PREFS
-        if val.startswith(p) and val.endswith(':N')
-    }
-
-    # Remove ventilator rows
-    suffix = '230VN2' if has_vnl2 else 'N'
-    def to_remove(row):
-        for sym in m_syms | x_syms:
-            if (row['Name'].startswith(sym) or row['Name.1'].startswith(sym)) and (
-               row['Name'].endswith(suffix) or row['Name.1'].endswith(suffix)):
-                return True
-        return False
-    df_filtered = df.loc[~df.apply(to_remove, axis=1)].reset_index(drop=True)
-
-    # Build new VENTS rows
-    target_wireno = '230VN2' if has_vnl2 else 'F903/N'
-    terminal = '-X0100:230VN2' if has_vnl2 else '-X0100:N'
-    new_rows = []
-
-    # Determine fallback X symbol for M chain when no K924
-    fallback_x = sorted(x_syms)[0] if x_syms else terminal
-
-    for sym in sorted(x_syms):
-        new_rows.append({
-            'Name': sym,
-            'Name.1': terminal,
-            'Wireno': target_wireno,
-            'Line-Name': '1,5',
-            'Line-Function': 'BU',
-            'DaisyNo': 'VENTS'
-        })
-    for sym in sorted(m_syms):
-        if has_k924 and sym == '-M925:N':
-            chain_to = '-X924:N'
-        elif has_k924:
-            chain_to = sym.replace('-M', '-X')
-        else:
-            chain_to = fallback_x
-        new_rows.append({
-            'Name': sym,
-            'Name.1': chain_to,
-            'Wireno': target_wireno,
-            'Line-Name': '1,5',
-            'Line-Function': 'BU',
-            'DaisyNo': 'VENTS'
-        })
-
-    if new_rows:
-        df_filtered = pd.concat([df_filtered, pd.DataFrame(new_rows)], ignore_index=True)
-    return df_filtered.reset_index(drop=True)
+    # Ventiliatoriu laidai atkuriami is originalo po viso Stage 1.
+    return df.copy().reset_index(drop=True)
 
 
 def stage1_pipeline_24(df):
@@ -4443,3 +4371,69 @@ def validate_multiple_connection_points(    df: pd.DataFrame,) -> pd.DataFrame:
     )
 
     return result.reset_index(drop=True)
+
+def restore_fan_connections(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
+    """Restore fan L/N/PE from unambiguous direct RAW connections.
+
+    A missing, conflicting, or indirect connection raises ValueError; never
+    invent a terminal. Non-fan rows remain untouched.
+    """
+    cols = {"Name", "Name.1"}
+    if not cols.issubset(df.columns) or not cols.issubset(df_original.columns):
+        raise ValueError("Ventiliatoriai: truksta Name arba Name.1 stulpelio")
+    raw = df_original.fillna("").copy()
+    fans = {}
+    fan_re = re.compile(r"^(-M92\d+):(L|N|PE|⏚)$", re.I)
+    terminal_re = re.compile(r"^(-X92\d+):([^:]+)$", re.I)
+    for _, row in raw.iterrows():
+        for side, other in (("Name", "Name.1"), ("Name.1", "Name")):
+            endpoint = str(row[side]).strip()
+            match = fan_re.fullmatch(endpoint)
+            if not match:
+                continue
+            fan, pin = match.group(1).upper(), match.group(2).upper()
+            pin = "PE" if pin == "⏚" else pin
+            fans.setdefault(fan, {}).setdefault(pin, []).append((endpoint, str(row[other]).strip(), row))
+    planned = []
+    problems = []
+    for fan, pins in sorted(fans.items()):
+        selected = {}
+        for pin in ("L", "N"):
+            candidates = [(end, dest, row) for end, dest, row in pins.get(pin, []) if terminal_re.fullmatch(dest)]
+            unique = {(end.upper(), dest.upper()) for end, dest, _ in candidates}
+            if len(unique) != 1:
+                problems.append(f"{fan}: {pin} terminalas nenustatytas vienareiksmiskai")
+                continue
+            selected[pin] = candidates[0]
+        pe = [(end, dest, row) for end, dest, row in pins.get("PE", []) if dest.upper().startswith("-XPE:")]
+        if len({(end.upper(), dest.upper()) for end, dest, _ in pe}) != 1:
+            problems.append(f"{fan}: PE jungtis su XPE nenustatyta vienareiksmiskai")
+        if len(selected) != 2 or not pe:
+            continue
+        lterm = terminal_re.fullmatch(selected["L"][1]).group(1).upper()
+        nterm = terminal_re.fullmatch(selected["N"][1]).group(1).upper()
+        if lterm != nterm:
+            problems.append(f"{fan}: L ({lterm}) ir N ({nterm}) terminalai skiriasi")
+            continue
+        for pin in ("L", "N", "PE"):
+            end, dest, row = pe[0] if pin == "PE" else selected[pin]
+            record = {col: "" for col in df.columns}
+            for col in record:
+                if col in row.index:
+                    record[col] = row[col]
+            record.update({"Name": end, "Name.1": f"{lterm}:PE" if pin == "PE" else dest,
+                           "Line-Function": {"L": "BK", "N": "BU", "PE": "GNYE"}[pin],
+                           "DaisyNo": "VENTS"})
+            if not str(record.get("Line-Name", "")).strip():
+                record["Line-Name"] = "1,5"
+            if pin == "PE": record["Wireno"] = "PE"
+            planned.append(record)
+    if problems:
+        raise ValueError("Ventiliatoriu jungciu klaidos: " + "; ".join(problems))
+    if not fans:
+        return df.copy().reset_index(drop=True)
+    def is_fan_endpoint(value):
+        return bool(fan_re.fullmatch(str(value).strip()))
+    remove = df["Name"].map(is_fan_endpoint) | df["Name.1"].map(is_fan_endpoint)
+    result = df.loc[~remove].copy()
+    return pd.concat([result, pd.DataFrame(planned, columns=df.columns)], ignore_index=True)
