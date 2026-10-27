@@ -36,6 +36,7 @@ from processing import (
     stage1_pipeline_27,
     stage1_pipeline_28,
     stage1_pipeline_29,
+    restore_fan_connections,
     stage2_pipeline_1,
     stage2_pipeline_2,
     stage2_pipeline_4,
@@ -497,6 +498,11 @@ if st.session_state.stage == "eplan":
                     df_stage1 = stage1_pipeline_27(df_stage1)
                     df_stage1 = stage1_pipeline_28(df_stage1, component_to_group)
                     df_stage1 = stage1_pipeline_29(df_stage1, df_original)
+                    try:
+                        df_stage1 = restore_fan_connections(df_stage1, df_original)
+                    except ValueError as exc:
+                        st.error(str(exc))
+                        st.stop()
 
                     # ---------------------------------------------------------
                     # GALUTINIO FAILO ENDPOINT / WIRENO PATIKRA
