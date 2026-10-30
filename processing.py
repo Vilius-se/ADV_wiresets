@@ -1167,6 +1167,39 @@ def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> p
         excluded_symbols.add(terminal)
         excluded_symbols.add(f"{terminal}_MAIN")
 
+        # K devices with GND and ~/- each get their own 0VDC branch.
+        # Never place two wires on GND, and never join different K devices.
+        if wireno == "0VDC":
+            paired_contacts = defaultdict(lambda: defaultdict(set))
+            for symbol in symbols:
+                component, pin = split_endpoint(symbol)
+                designation = component.rsplit("/", 1)[-1]
+                if not re.fullmatch(r"-?K[^:]*", designation, re.IGNORECASE):
+                    continue
+                normalized_pin = re.sub(r"\s+", "", pin).upper()
+                normalized_pin = normalized_pin.translate(str.maketrans({"−": "-", "–": "-", "～": "~"}))
+                if normalized_pin in {"GND", "~/-"}:
+                    paired_contacts[component][normalized_pin].add(symbol)
+
+            for component, contacts in sorted(paired_contacts.items()):
+                if "GND" not in contacts or "~/-" not in contacts:
+                    continue
+                if len(contacts["GND"]) != 1 or len(contacts["~/-"]) != 1:
+                    raise ValueError(f"{component}: keli GND arba ~/- kontaktu variantai 0VDC grandineje")
+                gnd = next(iter(contacts["GND"]))
+                supply = next(iter(contacts["~/-"]))
+                if {gnd, supply} & excluded_symbols:
+                    raise ValueError(f"{component}: GND/~/- kontaktas parinktas MAIN kelyje; reikia patikrinti 0VDC istaka")
+                for index, row in section.iterrows():
+                    if {clean(row.get("Name", "")), clean(row.get("Name.1", ""))} & {gnd, supply}:
+                        rows_to_remove.add(index)
+                daisy_group = f"K0VDC_{component}"
+                add_generated_row(terminal, supply, wireno, daisy_group,
+                                  daisy_line_name, default_function[wireno])
+                add_generated_row(supply, gnd, wireno, daisy_group,
+                                  daisy_line_name, default_function[wireno])
+                excluded_symbols.update({gnd, supply})
+
         for group, functions in group_symbols.items():
             matches = group_matches(
                 symbols,
@@ -2306,6 +2339,11 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         if not keep_component(component_endpoint):
             continue
 
+        size_endpoint = component_endpoint
+        # EPLAN import: normalize the protective-earth contact symbol.
+        if component_endpoint.endswith(":⏚"):
+            component_endpoint = component_endpoint.rsplit(":", 1)[0] + ":PE"
+
         endpoint_key = component_endpoint.upper()
 
         if endpoint_key in seen_endpoints:
@@ -2315,7 +2353,7 @@ def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
 
         # Visada tikrinami visi originalaus failo laidai,
         # prijungti prie to paties tikslaus kontakto.
-        line_name = contact_max_line_name(component_endpoint)
+        line_name = contact_max_line_name(size_endpoint)
 
         if not line_name:
             line_name = default_line_name(component_endpoint)
@@ -2818,7 +2856,12 @@ def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFra
 
         TARGET_LF = {"RD", "RD/WH", "DBU", "DBU/WH", "BK", "BU"}   # <-- čia gali pridėti daugiau
 
-        lf_idxs = [i for i in idxs if lf_norm.get(i, "") in TARGET_LF]
+        # Preserve the dedicated source -> K:~/- -> K:GND branches.
+        lf_idxs = [
+            i for i in idxs
+            if lf_norm.get(i, "") in TARGET_LF
+            and not str(df.at[i, "DaisyNo"] if "DaisyNo" in df.columns else "").startswith("K0VDC_")
+        ]
         if len(lf_idxs) < 2:
             continue
 
