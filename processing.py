@@ -2021,7 +2021,8 @@ def stage1_pipeline_24(df):
     Logic:
     1. Check for DaisyNo containing 'DOOR' or 'door' (case insensitive)
     2. For rows with DOOR DaisyNo, remove all 0VDC rows except the first occurrence
-    3. For rows with DOOR DaisyNo, remove all 230VN rows except the first occurrence
+    3. Keep only the unique DOOR 230VN connection to -X0101:230VN.
+       If the connection is missing or ambiguous, keep all DOOR 230VN rows.
     
     Parameters:
     -----------
@@ -2055,10 +2056,23 @@ def stage1_pipeline_24(df):
     
     print(f"🔍 Pipeline 24: Found {len(door_rows)} DOOR rows")
     
-    # Step 2: Process DOOR rows to keep only first occurrence of 0VDC and 230VN
+    neutral_rows = door_rows[door_rows['Wireno'].astype(str).str.strip().eq('230VN')]
+    terminal = '-X0101:230VN'
+    terminal_matches = (
+        neutral_rows.reindex(columns=['Name', 'Name.1'])
+        .apply(lambda column: column.astype(str).str.strip().eq(terminal))
+        .any(axis=1)
+    )
+    keep_terminal_only = int(terminal_matches.sum()) == 1
+    if not neutral_rows.empty and not keep_terminal_only:
+        print(
+            f"Pipeline 24: Found {terminal_matches.sum()} DOOR 230VN connections "
+            f"to {terminal}; keeping all {len(neutral_rows)} DOOR 230VN rows"
+        )
+
+    # Step 2: Apply the DOOR rules
     processed_door_rows = []
     seen_0vdc = False
-    seen_230vn = False
     removed_count = 0
     
     for idx, row in door_rows.iterrows():
@@ -2075,17 +2089,14 @@ def stage1_pipeline_24(df):
                 print(f"🗑️ Pipeline 24: Removing duplicate 0VDC DOOR row (index {idx})")
                 continue
         
-        # Check for 230VN
+        # Keep the unique connection to the distribution terminal.
         elif wireno == '230VN':
-            if not seen_230vn:
-                seen_230vn = True
-                processed_door_rows.append(row)
-                print(f"✅ Pipeline 24: Keeping first 230VN DOOR row (index {idx})")
-            else:
+            endpoints = (str(row.get('Name')).strip(), str(row.get('Name.1')).strip())
+            if keep_terminal_only and terminal not in endpoints:
                 removed_count += 1
-                print(f"🗑️ Pipeline 24: Removing duplicate 230VN DOOR row (index {idx})")
                 continue
-        
+            processed_door_rows.append(row)
+
         # Keep all other DOOR rows
         else:
             processed_door_rows.append(row)
