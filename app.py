@@ -47,6 +47,36 @@ from processing import (
     validate_multiple_connection_points,
 )
 
+def t901_wire_suggestion(source):
+    for column in ("Name", "Name.1"):
+        if source[column].fillna("").astype(str).str.strip().str.fullmatch(r"-?T901(?::.*)?").any():
+            return {
+                "Name": "-T901:0V**",
+                "Name.1": "-T901:115V*",
+                "Wireno": "90:10",
+                "Line-Name": "0,75",
+                "Line-Function": "RD",
+            }
+    return None
+
+
+def apply_suggested_wire(frame, suggestion, edited):
+    columns = list(suggestion)
+    target = suggestion["Name"], suggestion["Name.1"]
+    first = frame["Name"].astype(str).str.replace(r"[\\s-]", "", regex=True)
+    second = frame["Name.1"].astype(str).str.replace(r"[\\s-]", "", regex=True)
+    left, right = (value.lstrip("-") for value in target)
+    same_contacts = ((first == left) & (second == right)) | ((first == right) & (second == left))
+    same_tag = frame["Wireno"].astype(str).str.strip().eq(suggestion["Wireno"])
+    result = frame.loc[~(same_contacts & same_tag)].copy()
+    if edited["Delete"]:
+        return result
+
+    wire = {column: edited[column] for column in columns}
+    wire["DaisyNo"] = "0"
+    return pd.concat([result, pd.DataFrame([wire], columns=frame.columns)], ignore_index=True)
+
+
 st.set_page_config(
     page_title="Advansor Wireset Testas",
     page_icon="⚡",
@@ -733,6 +763,9 @@ if st.session_state.stage == "eplan":
 
                     # Store in session state
                     st.session_state["stage1_data"] = df_stage1
+                    st.session_state["stage1_upload_id"] = uploaded_file.file_id
+                    st.session_state["suggested_wire"] = t901_wire_suggestion(df_original)
+                    st.session_state["stage1_run"] = st.session_state.get("stage1_run", 0) + 1
                     st.session_state["blank_cells"] = blank_cells
 
                     # Show blank cell statistics
@@ -757,7 +790,7 @@ if st.session_state.stage == "eplan":
                         )
 
     # -------- Blank cell editor & download block -------- #
-    if "stage1_data" in st.session_state and st.session_state["stage1_data"] is not None:
+    if uploaded_file is not None and st.session_state.get("stage1_upload_id") == uploaded_file.file_id:
         st.markdown("---")
         full_df = st.session_state["stage1_data"].copy()
         blank_cells = st.session_state.get("blank_cells", {})
@@ -825,6 +858,25 @@ if st.session_state.stage == "eplan":
                     key="data_editor",
                     on_change=update_blank_cells
                 )
+
+        suggestion = st.session_state.get("suggested_wire")
+        if suggestion is not None:
+            st.markdown("### Suggested Wires")
+            st.caption("Edit the suggested wire or check Delete to exclude it from the EPLAN export.")
+            edited = st.data_editor(
+                pd.DataFrame([{**suggestion, "Delete": False}]),
+                column_config={
+                    "Wireno": st.column_config.TextColumn("Wire-Tag", required=True),
+                    "Line-Name": st.column_config.TextColumn("Cross-Section", required=True),
+                    "Line-Function": st.column_config.TextColumn("Wire-Color", required=True),
+                    "Delete": st.column_config.CheckboxColumn("Delete", default=False),
+                },
+                hide_index=True,
+                num_rows="fixed",
+                use_container_width=True,
+                key=f'suggested_wire_{st.session_state["stage1_run"]}',
+            ).iloc[0]
+            full_df = apply_suggested_wire(full_df, suggestion, edited)
 
         # Download section
         st.markdown("---")
