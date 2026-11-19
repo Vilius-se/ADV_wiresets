@@ -859,9 +859,11 @@ if st.session_state.stage == "eplan":
                     on_change=update_blank_cells
                 )
 
+        st.markdown("### Suggested Wires")
         suggestion = st.session_state.get("suggested_wire")
-        if suggestion is not None:
-            st.markdown("### Suggested Wires")
+        if suggestion is None:
+            st.info("T901 was not found in the source Excel. No wire was suggested.")
+        else:
             st.caption("Edit the suggested wire or check Delete to exclude it from the EPLAN export.")
             edited = st.data_editor(
                 pd.DataFrame([{**suggestion, "Delete": False}]),
