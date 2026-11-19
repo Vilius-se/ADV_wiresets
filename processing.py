@@ -491,7 +491,8 @@ def stage1_pipeline_9(df: pd.DataFrame) -> pd.DataFrame:
     mask_25 = working['Line-Name']=='2,5'
     mask_bat = working['Name'].str.contains('BAT',na=False,case=False) | working['Name.1'].str.contains('BAT',na=False,case=False)
     mask_transformer = working['Name'].str.contains(r'-T8\d', na=False, regex=True) | working['Name.1'].str.contains(r'-T8\d', na=False, regex=True)
-    working = working[~(mask_25 & ~mask_bat & ~mask_transformer)]
+    mask_10_wires = working['Wireno'].astype(str).str.strip().str.startswith('10:')
+    working = working[~(mask_25 & ~mask_bat & ~mask_transformer & ~mask_10_wires)]
 
     # ── end original logic ──
 
@@ -1696,7 +1697,8 @@ def stage1_pipeline_16(df: pd.DataFrame) -> pd.DataFrame:
         (name1_is_f & name_is_xs)
     )
 
-    mask_drop = (name_is_f | name1_is_f) & ~keep_fx_fs
+    mask_10_wires = working['Wireno'].astype(str).str.strip().str.startswith('10:')
+    mask_drop = (name_is_f | name1_is_f) & ~keep_fx_fs & ~mask_10_wires
     working = working.loc[~mask_drop].reset_index(drop=True)
 
     # 4) Re-attach the -X102:* rows
@@ -3033,18 +3035,6 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
                     symbols.append(s)
         return symbols
 
-    def find_symbol_by_base(symbols: list, base_name: str):
-        for s in symbols:
-            if sym_base(s) == base_name:
-                return s
-        return None
-
-    def find_optional_symbol(symbols: list, excluded_bases: set):
-        for s in symbols:
-            if sym_base(s) not in excluded_bases:
-                return s
-        return None
-
     def is_fxx8_candidate(sym: str) -> bool:
         """
         Kandidatai:
@@ -3091,88 +3081,33 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         middle_idx = (len(ordered) - 1) // 2
         return ordered[middle_idx], ordered
 
-    def sort_key_for_symbol(sym: str):
-        b = sym_base(sym)
-
-        if b == "-F903":
-            return (0, b)
-        if b == "-C90A1":
-            return (1, b)
-        if b == "-X908":
-            return (3, b)
-        return (2, b)
-
-    # 1) Išvalom senas sugeneruotas eilutes
-    remove_wirenos = {"230VL2", "F903/L", "F903/L3", "230VN2", "F903/N"}
-    df = df[~df["Wireno"].astype(str).isin(remove_wirenos)].reset_index(drop=True)
-
     new_rows = []
+    replaced_wirenos = set()
 
-    # ------------------------------------------------------------------
-    # 2) F903/L ir F903/N - kiekviena grandinė atskirai
-    # ------------------------------------------------------------------
+    # Išlaikom originalias F903 jungčių poras ir kontaktus.
+    # Komponentų žymėjimai priklauso nuo projekto.
     for wireno_value, lf_default in [
         ("F903/L", "BK"),
         ("F903/N", "BU"),
     ]:
-        src = df_original[df_original["Wireno"].astype(str).str.strip() == wireno_value].copy()
+        src = df_original[df_original["Wireno"].str.strip() == wireno_value]
         if src.empty:
             continue
 
-        symbols = unique_symbols_from_src(src)
-        symbols = sorted(symbols, key=sort_key_for_symbol)
-
-        f903_sym = find_symbol_by_base(symbols, "-F903")
-        c90a1_sym = find_symbol_by_base(symbols, "-C90A1")
-        x908_sym = find_symbol_by_base(symbols, "-X908")
-
-        if not (f903_sym and c90a1_sym and x908_sym):
+        endpoints = src[["Name", "Name.1"]].apply(lambda column: column.str.strip())
+        missing_values = {"", "nan", "none", "<na>"}
+        if endpoints.apply(lambda column: column.str.lower().isin(missing_values)).any().any():
             continue
 
-        optional_sym = find_optional_symbol(
-            symbols,
-            excluded_bases={"-F903", "-C90A1", "-X908"}
-        )
+        for _, row in src.iterrows():
+            name = row["Name"].strip()
+            name1 = row["Name.1"].strip()
+            line_function = row.get("Line-Function", "").strip()
+            if line_function.lower() in missing_values:
+                line_function = lf_default
+            add_row(new_rows, name, name1, wireno_value, "1,5", line_function)
 
-        add_row(
-            new_rows,
-            f903_sym,
-            c90a1_sym,
-            wireno_value,
-            "1,5",
-            inherit_line_function(src, f903_sym, lf_default),
-            "0"
-        )
-
-        if optional_sym:
-            add_row(
-                new_rows,
-                c90a1_sym,
-                optional_sym,
-                wireno_value,
-                "1,5",
-                inherit_line_function(src, c90a1_sym, lf_default),
-                "0"
-            )
-            add_row(
-                new_rows,
-                optional_sym,
-                x908_sym,
-                wireno_value,
-                "1,5",
-                inherit_line_function(src, optional_sym, lf_default),
-                "0"
-            )
-        else:
-            add_row(
-                new_rows,
-                c90a1_sym,
-                x908_sym,
-                wireno_value,
-                "1,5",
-                inherit_line_function(src, c90a1_sym, lf_default),
-                "0"
-            )
+        replaced_wirenos.add(wireno_value)
 
     # ------------------------------------------------------------------
     # 3) 230VL2 ir 230VN2 - kiekviena grandinė atskirai
@@ -3185,6 +3120,7 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
         if src.empty:
             continue
 
+        first_new_row = len(new_rows)
         middle_f, all_f_candidates = choose_middle_fxx8(src, required_suffix=suffix)
 
         # Vidurinis Fxx8 per F104 su Line-Name 2,5
@@ -3292,9 +3228,13 @@ def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFr
                 "0"
             )   
 
-    # 4) Prijungiam atgal
+        if len(new_rows) > first_new_row:
+            replaced_wirenos.add(wireno_value)
+
+    # Keičiam tik tas grandines, kurioms sugeneravom pakaitines eilutes.
     if new_rows:
-        df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+        keep = ~df["Wireno"].astype(str).str.strip().isin(replaced_wirenos)
+        df = pd.concat([df.loc[keep], pd.DataFrame(new_rows)], ignore_index=True)
 
     # 5) Dedupe
     if {"Name", "Name.1", "Wireno"}.issubset(df.columns):
