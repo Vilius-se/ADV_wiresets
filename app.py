@@ -1,944 +1,4433 @@
-import streamlit as st
 import pandas as pd
-import time
-from io import BytesIO
-import csv
-import math
+import os
+from collections import defaultdict
 import re
-
-from processing import (
-    stage1_pipeline_1,
-    stage1_pipeline_2,
-    stage1_pipeline_3,
-    stage1_pipeline_4,
-    stage1_pipeline_5,
-    stage1_pipeline_6,
-    stage1_pipeline_7,
-    stage1_pipeline_7_1,
-    stage1_pipeline_8,
-    stage1_pipeline_9,
-    stage1_pipeline_11,
-    stage1_pipeline_12,
-    stage1_pipeline_13,
-    parse_component_functions,
-    stage1_pipeline_14,
-    identify_blank_cells,
-    stage1_pipeline_15,
-    stage1_pipeline_16,
-    stage1_pipeline_17,
-    stage1_pipeline_18,
-    stage1_pipeline_20,
-    stage1_pipeline_21,
-    stage1_pipeline_22,
-    stage1_pipeline_24,
-    stage1_pipeline_25,
-    stage1_pipeline_26,
-    stage1_pipeline_27,
-    stage1_pipeline_28,
-    stage1_pipeline_29,
-    restore_fan_connections,
-    stage2_pipeline_1,
-    stage2_pipeline_2,
-    stage2_pipeline_4,
-    stage2_pipeline_5,
-    stage2_final_text_to_columns,
-    validate_distribution_terminals,
-    validate_duplicate_endpoint_wirenos,
-    validate_multiple_connection_points,
-)
-
-def t901_wire_suggestion(source):
-    for column in ("Name", "Name.1"):
-        if source[column].fillna("").astype(str).str.strip().str.fullmatch(r"-?T901(?::.*)?").any():
-            return {
-                "Name": "-T901:0V**",
-                "Name.1": "-T901:115V*",
-                "Wireno": "90:10",
-                "Line-Name": "0,75",
-                "Line-Function": "RD",
-            }
-    return None
+import csv
 
 
-def apply_suggested_wire(frame, suggestion, edited):
-    columns = list(suggestion)
-    target = suggestion["Name"], suggestion["Name.1"]
-    first = frame["Name"].astype(str).str.replace(r"[\\s-]", "", regex=True)
-    second = frame["Name.1"].astype(str).str.replace(r"[\\s-]", "", regex=True)
-    left, right = (value.lstrip("-") for value in target)
-    same_contacts = ((first == left) & (second == right)) | ((first == right) & (second == left))
-    same_tag = frame["Wireno"].astype(str).str.strip().eq(suggestion["Wireno"])
-    result = frame.loc[~(same_contacts & same_tag)].copy()
-    if edited["Delete"]:
-        return result
+def friendly_file_type(filetype: str, filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in [".xls", ".xlsx"]:
+        return "Excel"
+    if ext == ".csv":
+        return "CSV"
+    if ext in [".txt"]:
+        return "Text"
+    # fallback
+    if filetype.startswith("application/vnd.openxmlformats"):
+        return "Excel"
+    if filetype.startswith("text/"):
+        return "Text"
+    return filetype.split("/")[-1].capitalize()
 
-    wire = {column: edited[column] for column in columns}
-    wire["DaisyNo"] = "0"
-    return pd.concat([result, pd.DataFrame([wire], columns=frame.columns)], ignore_index=True)
+def stage1_pipeline_1(df: pd.DataFrame):
+    df = df.copy()
+    df = df.fillna("")
+    df = df.astype(str)
+    if 'Line-Article' in df.columns:
+        df = df.drop('Line-Article', axis=1)
+    if 'Name' in df.columns and 'C.Label' in df.columns:
+        mask = df['C.Label'].str.startswith('J')
+        df.loc[mask, 'Name'] = (df.loc[mask, 'Name'] + " " + df.loc[mask, 'C.Label']).str.strip()
+    if 'C.Label' in df.columns:
+        df = df.drop('C.Label', axis=1)
+    if 'Name.1' in df.columns and 'C.Label.1' in df.columns:
+        mask = df['C.Label.1'].str.startswith('J')
+        df.loc[mask, 'Name.1'] = (df.loc[mask, 'Name.1'] + " " + df.loc[mask, 'C.Label.1']).str.strip()
+    if 'C.Label.1' in df.columns:
+        df = df.drop('C.Label.1', axis=1)
+    if 'C.Label.2' in df.columns:
+        df = df.drop('C.Label.2', axis=1)
+    if 'Name' in df.columns and 'Name.1' in df.columns:
+        df = df[df['Name'] != df['Name.1']]
+    n_before = len(df)
+    df = df.drop_duplicates(ignore_index=True)
+    removed_duplicates = n_before - len(df)
+    return df, removed_duplicates
 
+def stage1_pipeline_2(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
 
-st.set_page_config(
-    page_title="Advansor Wireset Testas",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+    block_values = [
+        "cable",
+        "Cable",
+        "External",
+        "GNYE",
+        "Interal cable",
+        "Internal Cable",
+        "internal cable",
+        "Internal cable",
+        "Power",
+        "power",
+    ]
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    # -------------------------------------------------
+    # Remove Cable / Power / External rows
+    # -------------------------------------------------
+    if "Line-Function" in df.columns:
+        df = df[
+            ~df["Line-Function"].isin(block_values)
+        ]
 
-.stApp {
-    background: linear-gradient(135deg, #f8fafc 0%, #ffffff 50%, #f8fafc 100%);
-}
-
-.main .block-container {
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-}
-
-.stMarkdown,
-.stMarkdown p,
-.stMarkdown li,
-.stMarkdown span {
-    color: #374151;
-}
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6,
-.stMarkdown h1,
-.stMarkdown h2,
-.stMarkdown h3,
-.stMarkdown h4 {
-    color: #2d3748 !important;
-    font-family: 'Inter', sans-serif;
-    font-weight: 700 !important;
-}
-
-label,
-[data-testid="stFileUploader"] span,
-[data-testid="stFileUploader"] small,
-[data-testid="stFileUploader"] p,
-[data-testid="stWidgetLabel"] p {
-    color: #4b5563 !important;
-}
-
-[data-testid="stAlert"] p,
-[data-testid="stAlert"] span {
-    color: #374151 !important;
-    font-weight: 500;
-}
-
-[data-testid="stMetricLabel"] p,
-[data-testid="stMetricLabel"] div {
-    color: #374151 !important;
-    font-weight: 600;
-}
-
-[data-testid="stMetricValue"] div {
-    color: #2d3748 !important;
-}
-
-[data-testid="stDataFrame"] {
-    color: #374151 !important;
-}
-
-.main-title {
-    font-family: 'Inter', sans-serif;
-    font-size: 3.5rem;
-    font-weight: 700;
-    text-align: center;
-    margin-bottom: 0.5rem;
-    background: linear-gradient(
-        135deg,
-        #00d4aa 0%,
-        #00a693 30%,
-        #0ea5e9 70%,
-        #0284c7 100%
-    );
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    text-shadow: 0 4px 20px rgba(0, 212, 170, 0.3);
-}
-
-.subtitle {
-    font-family: 'Inter', sans-serif;
-    text-align: center;
-    color: #64748b !important;
-    font-size: 1.3rem;
-    font-weight: 400;
-    margin-bottom: 3rem;
-}
-
-.electric-line {
-    height: 2px;
-    background: linear-gradient(
-        90deg,
-        transparent 0%,
-        #00d4aa 20%,
-        #0ea5e9 50%,
-        #00d4aa 80%,
-        transparent 100%
-    );
-    margin: 1rem auto 2rem auto;
-    width: 60%;
-    box-shadow: 0 0 10px rgba(0, 212, 170, 0.5);
-}
-
-.upload-container {
-    border: 2px dashed #64748b;
-    border-radius: 16px;
-    padding: 3rem 2rem;
-    text-align: center;
-    background: linear-gradient(
-        135deg,
-        rgba(241, 245, 249, 0.95) 0%,
-        rgba(226, 232, 240, 0.72) 100%
-    );
-    margin: 2rem 0;
-    backdrop-filter: blur(10px);
-    transition: all 0.3s ease;
-}
-
-.upload-container:hover {
-    border-color: #00a693;
-}
-
-.status-success {
-    background: linear-gradient(135deg, #00d4aa 0%, #059669 100%);
-    color: white !important;
-    padding: 1rem;
-    border-radius: 12px;
-}
-
-.status-success *,
-.status-info *,
-.status-warning * {
-    color: white !important;
-}
-
-.status-info {
-    background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
-    color: white !important;
-    padding: 1rem;
-    border-radius: 12px;
-}
-
-.status-warning {
-    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-    color: white !important;
-    padding: 1rem;
-    border-radius: 12px;
-}
-
-.stMetric {
-    background: linear-gradient(
-        135deg,
-        rgba(100, 116, 139, 0.42) 0%,
-        rgba(148, 163, 184, 0.32) 100%
-    );
-    padding: 1rem;
-    border-radius: 8px;
-}
-
-.stButton > button {
-    background: linear-gradient(135deg, #00d4aa 0%, #0ea5e9 100%);
-    color: white !important;
-    border-radius: 12px;
-    padding: 0.75rem 2rem;
-    font-weight: 600;
-    font-family: 'Inter', sans-serif;
-    transition: all 0.3s;
-}
-
-.stButton > button * {
-    color: white !important;
-}
-
-.stButton > button:hover {
-    transform: translateY(-2px);
-}
-
-.success-message {
-    color: #15803d;
-    font-weight: 600;
-    font-size: 0.9rem;
-}
-
-.blank-cell-highlight {
-    background-color: #fef3c7 !important;
-    border: 2px solid #f59e0b !important;
-}
-
-.section-heading {
-    color: #2d3748 !important;
-    font-family: 'Inter', sans-serif;
-    font-size: 1.45rem;
-    font-weight: 700;
-    margin: 1.15rem 0 0.55rem 0;
-    padding: 0;
-}
-
-.group-column-title {
-    color: #374151 !important;
-    font-family: 'Inter', sans-serif;
-    font-size: 1rem;
-    font-weight: 700;
-    margin: 0 0 0.35rem 0;
-    padding: 0;
-}
-
-.terminal-group-title {
-    color: #374151 !important;
-    font-family: monospace;
-    font-weight: 700;
-    margin: 0;
-    padding: 0;
-    line-height: 1.15;
-}
-
-.terminal-row {
-    color: #4b5563 !important;
-    font-family: monospace;
-    font-weight: 500;
-    margin: 0;
-    padding: 0;
-    line-height: 1.15;
-    white-space: pre;
-}
-
-.app-footer {
-    color: #64748b !important;
-}
-
-#MainMenu,
-footer,
-header {
-    visibility: hidden;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown('<h1 class="main-title">⚡ Advansor Wireset testas</h1>', unsafe_allow_html=True)
-st.markdown('<div class="electric-line"></div>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="subtitle">Intelligent Excel Processing • Sustainable Data Solutions • The Future is Electric</p>',
-    unsafe_allow_html=True)
-
-# ── NAVIGATION ──────────────────────────────────────────────────────────────
-st.markdown("<div style='text-align:center; margin-bottom:2rem;'>", unsafe_allow_html=True)
-# Centered dual-button navigation
-if "stage" not in st.session_state:
-    st.session_state.stage = None
-
-# Use three columns: left spacer, center (with both buttons), right spacer
-col_left, col_center, col_right = st.columns([4, 2, 4])
-with col_center:
-    # The two buttons, stacked vertically and centered
-    if st.button("🚀 Convert for EPLAN", key="btn_eplan", use_container_width=True):
-        st.session_state.stage = "eplan"
-    st.write("")  # vertical spacing
-    if st.button("🔧 Convert for KOMAX", key="btn_komax", use_container_width=True):
-        st.session_state.stage = "komax"
-
-st.markdown("---")
-
-# ── STAGE 1 EPLAN UI ────────────────────────────────────────────────────────
-if st.session_state.stage == "eplan":
-    st.header("Stage 1: Convert for EPLAN")
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("### 📁 Upload your MAIN Excel file")
-        uploaded_file = st.file_uploader(
-            "Main Excel file (PCSchematic export)...",
-            type=['xlsx', 'xls'],
-            help="Upload your main Excel file",
-            label_visibility="collapsed",
-            key="mainfile"
+    # -------------------------------------------------
+    # Remove PE rows
+    # -------------------------------------------------
+    mask_pe = ~df.astype(str).apply(
+        lambda col: col.str.contains(
+            "PE",
+            na=False,
         )
-        st.markdown("### 📥 Upload the ADV_WS_functions file")
-        uploaded_advws = st.file_uploader(
-            "Advansor component functions file...",
-            type=['xlsx', 'xls'],
-            help="Upload the ADV_WS_functions.xlsx file",
-            label_visibility="collapsed",
-            key="advwsfile"
+    ).any(axis=1)
+
+    df = df.loc[mask_pe]
+
+    # -------------------------------------------------
+    # Remove all rows where Name or Name.1 starts with "+"
+    # -------------------------------------------------
+    if {
+        "Name",
+        "Name.1",
+    }.issubset(df.columns):
+
+        mask_plus = (
+            df["Name"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.startswith("+")
+            |
+            df["Name.1"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.startswith("+")
         )
 
-        requirements_ready = (
-            uploaded_file is not None
-            and uploaded_advws is not None
+        df = df.loc[~mask_plus]
+
+    # -------------------------------------------------
+    # Remove empty internal -XT... links
+    #
+    # Examples:
+    # -XTB6:⏚ -> -XTB6:14
+    # -XTB7:⏚ -> -XTB7:15
+    #
+    # The row is removed only when:
+    # - both ends belong to the same -XT... component;
+    # - Line-Function is empty.
+    # -------------------------------------------------
+    if {
+        "Name",
+        "Name.1",
+        "Line-Function",
+    }.issubset(df.columns):
+
+        def base_component(value):
+            value = str(value).strip()
+
+            if ":" in value:
+                value = value.rsplit(":", 1)[0]
+
+            return value
+
+        name_base = df["Name"].apply(
+            base_component
         )
 
-        if uploaded_file is not None:
-            short_filename = (
-                uploaded_file.name
-                if len(uploaded_file.name) <= 20
-                else uploaded_file.name[:17] + "..."
-            )
+        name_1_base = df["Name.1"].apply(
+            base_component
+        )
 
-            try:
-                df = pd.read_excel(uploaded_file)
-                # Paliekami tik pirmi 8 stulpeliai (A:H)
-                df = df.iloc[:, :8].copy()
-                # Originalas tolimesnėms patikroms / pipeline'ams
-                df_original = df.copy()
-            except Exception as e:
-                st.error(f"⚠️ SYSTEM ERROR: {e}")
-                st.stop()
+        line_function_empty = (
+            df["Line-Function"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            == ""
+        )
 
-            st.markdown(
-                '<div class="status-success">'
-                '🔋 Main file uploaded!'
-                '</div>',
-                unsafe_allow_html=True,
-            )
+        mask_internal_xt = (
+            name_base.str.startswith("-XT")
+            &
+            (name_base == name_1_base)
+            &
+            line_function_empty
+        )
 
-        if uploaded_advws is not None:
-            try:
-                df_component = pd.read_excel(uploaded_advws)
-            except Exception as e:
-                st.error(
-                    f"⚠️ SYSTEM ERROR with ADV_WS_functions: {e}"
-                )
-                st.stop()
+        df = df.loc[~mask_internal_xt]
 
-            st.markdown(
-                '<div class="status-success">'
-                '✅ ADV_WS_functions file uploaded!'
-                '</div>',
-                unsafe_allow_html=True,
-            )
+    return df.reset_index(drop=True)
 
-        # ---------------------------------------------------------
-        # ORIGINALAUS FAILO TERMINALŲ IR SPALVŲ PATIKRA
-        # ---------------------------------------------------------
-        if uploaded_file is not None:
-            st.markdown("### 🔎 Distribution Terminal Check")
+def stage1_pipeline_3(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    replacements = {
+        "24VDC.": "24VDC",
+        "DBL": "DBU",
+        "DBLWH": "DBU/WH",
+        "DBUWH": "DBU/WH",
+        "RDWH": "RD/WH",
+        "LBL": "BU",
+        "N'": "N2",
+        "N´": "N2",
+        "N`": "N2",
+        "'": "",
+        "\u23F6": "~",
+        ".P": "",
+        ".S": "",
+        "1,0": "0,75",
+        "\u23E6": "~",
+        "0VDC.": "0VDC",
+        "24VDC.": "24VDC",
+        "24VDC1.": "24VDC1",
+        "24VDC2.": "24VDC2",
+        "24VDC3.": "24VDC3"
+    }
+    for col in df.columns:
+        df[col] = df[col].astype(str)
+        for old, new in replacements.items():
+            df[col] = df[col].str.replace(old, new, regex=False)
+    return df
 
-            distribution_errors = validate_distribution_terminals(
-                df_original
-            )
+def stage1_pipeline_4(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    col6_name = df.columns[5] if len(df.columns) > 5 else None
+    col1_name = df.columns[0] if len(df.columns) > 0 else None
+    col2_name = df.columns[1] if len(df.columns) > 1 else None
+    if not col6_name or not col1_name or not col2_name:
+        return df
+    cond_col6 = df[col6_name].isin(['BK', 'LBL'])
+    pattern = r'^-F6\d{2}:'
+    cond_col1 = df[col1_name].astype(str).str.match(pattern)
+    cond_col2 = df[col2_name].astype(str).str.match(pattern)
+    to_remove = cond_col6 & (cond_col1 | cond_col2)
+    df_filtered = df[~to_remove]
+    return df_filtered
 
-            if distribution_errors.empty:
-                st.success(
-                    "✅ X0100 / X0101 / X0102 terminalai ir "
-                    "paskirstymo grandinių spalvos yra tinkamos."
-                )
-            else:
-                st.error(
-                    f"❌ Rastos {len(distribution_errors)} "
-                    "paskirstymo grandinių problemos."
-                )
+def stage1_pipeline_5(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if 'Name' not in df.columns or 'Name.1' not in df.columns:
+        return df
+    mask_r = df['Name'].str.startswith('-R')
+    df.loc[mask_r, ['Name', 'Name.1']] = df.loc[mask_r, ['Name.1', 'Name']].values
+    relay_map = {
+        row['Name.1']: row['Name']
+        for _, row in df.iterrows()
+        if isinstance(row['Name.1'], str) and row['Name.1'].startswith('-R')
+    }
+    rows_out = []
+    for idx, row in df.iterrows():
+        name_left = row['Name']
+        name_right = row['Name.1']
+        walked = set()
+        while isinstance(name_right, str) and name_right.startswith('-R') and name_right in relay_map:
+            if name_right in walked:
+                break
+            walked.add(name_right)
+            name_right = relay_map[name_right]
+        new_row = row.copy()
+        new_row['Name.1'] = name_right
+        rows_out.append(new_row)
+    result_df = pd.DataFrame(rows_out, columns=df.columns)
+    mask_duplicates = result_df['Name'] == result_df['Name.1']
+    result_df = result_df[~mask_duplicates].reset_index(drop=True)
+    result_df = result_df.drop_duplicates(ignore_index=True)
+    return result_df
 
-                st.dataframe(
-                    distribution_errors,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(
-                        500,
-                        80 + len(distribution_errors) * 35,
-                    ),
-                )
-        # ---------------------------------------------------------
-        # MULTIPLE CONNECTION POINT CHECK
-        # ---------------------------------------------------------
-        if uploaded_file is not None:
+def stage1_pipeline_6(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    suffixes = [':A', ':B', ':C', ':D', ':E', ':F']
+    def check_pattern(val: str) -> bool:
+        if not isinstance(val, str):
+            return False
+        if val.startswith('-K') and any(val.endswith(suffix) for suffix in suffixes):
+            return True
+        return False
+    mask_name = df['Name'].apply(check_pattern) if 'Name' in df.columns else pd.Series(False, index=df.index)
+    mask_name1 = df['Name.1'].apply(check_pattern) if 'Name.1' in df.columns else pd.Series(False, index=df.index)
+    mask_to_keep = ~(mask_name | mask_name1)
+    df_filtered = df.loc[mask_to_keep].reset_index(drop=True)
+    return df_filtered
 
-            connection_point_errors = validate_multiple_connection_points(
-                df_original
-            )
+def stage1_pipeline_7(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if not all(col in df.columns for col in ['Name', 'Name.1', 'Wireno']):
+        return df
+    df['Wireno'] = df['Wireno'].fillna("").astype(str)
+    wireno_map = {}
+    name_wireno = df.loc[df['Wireno'] != "", ['Name', 'Wireno']].drop_duplicates(subset=['Name'])
+    for _, row in name_wireno.iterrows():
+        wireno_map[row['Name']] = row['Wireno']
+    name1_wireno = df.loc[df['Wireno'] != "", ['Name.1', 'Wireno']].drop_duplicates(subset=['Name.1'])
+    for _, row in name1_wireno.iterrows():
+        if row['Name.1'] not in wireno_map:
+            wireno_map[row['Name.1']] = row['Wireno']
+    def fill_wireno(row):
+        if row['Wireno'] != "":
+            return row['Wireno']
+        for key in [row['Name'], row['Name.1']]:
+            if key in wireno_map and wireno_map[key] != "":
+                return wireno_map[key]
+        return ""
+    df['Wireno'] = df.apply(fill_wireno, axis=1)
+    return df
 
-            # Rodome tik tada, jei rasta klaidų
-            if not connection_point_errors.empty:
-                st.error(
-                    f"❌ Connection Point Error — rasta "
-                    f"{len(connection_point_errors)} Wireno su daugiau nei "
-                    f"2 jungtimis tame pačiame pajungimo taške."
-                )
-
-                st.dataframe(
-                    connection_point_errors,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(
-                        400,
-                        60 + len(connection_point_errors) * 35,
-                    ),
-                )
-        
-        # -------- Processing Block -------- #
-        if requirements_ready:
-            st.markdown("### 🚦 All files uploaded, ready for processing!")
-
-            if st.button(
-                "🚀 RUN STAGE 1 TRANSFORMATION",
-                type="primary",
-                use_container_width=True,
-            ):
-                with st.spinner("⚙️ Processing wireset... Please wait."):
-                    transformation_start = time.perf_counter()
-
-                    df_stage1, removed_duplicates = stage1_pipeline_1(df.copy())
-                    df_stage1 = stage1_pipeline_2(df_stage1)
-                    df_stage1 = stage1_pipeline_3(df_stage1)
-                    df_stage1 = stage1_pipeline_4(df_stage1)
-                    df_stage1 = stage1_pipeline_5(df_stage1)
-                    df_stage1 = stage1_pipeline_6(df_stage1)
-                    df_stage1 = stage1_pipeline_7(df_stage1)
-                    df_stage1 = stage1_pipeline_8(df_stage1)
-                    df_stage1 = stage1_pipeline_9(df_stage1)
-                    # --- FIX EPLAN STRUCTURE (=POWER+X-F128 → =POWER-F128) ---
-                    df_component_fixed = df_component.copy()
-                    col_name = df_component_fixed.columns[0]
-
-                    df_component_fixed[col_name] = (
-                        df_component_fixed[col_name]
-                        .astype(str)
-                        .str.strip()
-                        .apply(lambda x: re.sub(r'^(=[^+\-]+)\+[^-]*', r'\1', x) if isinstance(x, str) and x.strip().startswith("=") else x)
-                    )
-                    group_symbols = parse_component_functions(df_component_fixed)
-                    # Convert group_symbols (GROUP -> [components])
-                    # into component_to_group (component -> GROUP)
-                    component_to_group = {}
-                    for group, symbols in group_symbols.items():
-                        for sym in symbols:
-                            component_to_group[sym] = group.upper()
-                    df_stage1 = stage1_pipeline_16(df_stage1)
-                    df_stage1 = stage1_pipeline_7_1(df_stage1)
-                    df_stage1 = stage1_pipeline_11(df_stage1, group_symbols)
-                    df_stage1 = stage1_pipeline_12(df_stage1, group_symbols)
-                    df_stage1 = stage1_pipeline_13(df_stage1)
-                    df_stage1 = stage1_pipeline_15(df_stage1)
-                    df_stage1 = stage1_pipeline_17(df_stage1)
-                    df_stage1 = stage1_pipeline_18(df_stage1)
-                    df_stage1 = stage1_pipeline_20(df_stage1)
-                    df_stage1 = stage1_pipeline_21(df_stage1)
-                    df_stage1 = stage1_pipeline_22(df_stage1)
-                    df_stage1 = stage1_pipeline_24(df_stage1)
-                    df_stage1 = stage1_pipeline_25(df_stage1, df_original)
-                    df_stage1 = stage1_pipeline_26(df_stage1)
-                    df_stage1 = stage1_pipeline_27(df_stage1)
-                    df_stage1 = stage1_pipeline_28(df_stage1, component_to_group)
-                    df_stage1 = stage1_pipeline_29(df_stage1, df_original)
-                    try:
-                        df_stage1 = restore_fan_connections(df_stage1, df_original)
-                    except ValueError as exc:
-                        st.error(str(exc))
-                        st.stop()
-
-                    # ---------------------------------------------------------
-                    # GALUTINIO FAILO ENDPOINT / WIRENO PATIKRA
-                    # Funkcija yra tik informacinė ir duomenų nekeičia.
-                    # ---------------------------------------------------------
-                    endpoint_errors = validate_duplicate_endpoint_wirenos(
-                        df_stage1
-                    )
-
-
-                    st.markdown(
-                        '<div class="section-heading">🔎 Result Validation</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                    if endpoint_errors.empty:
-                        st.success(
-                            "✅ Galutiniame faile nerasta komponentų kontaktų, "
-                            "naudojamų su keliais skirtingais Wireno."
-                        )
-                    else:
-                        st.warning(
-                            f"⚠️ Galutiniame faile rasta "
-                            f"{len(endpoint_errors)} kontaktų su keliais "
-                            "skirtingais Wireno."
-                        )
-
-                        st.dataframe(
-                            endpoint_errors,
-                            use_container_width=True,
-                            hide_index=True,
-                            height=min(
-                                500,
-                                80 + len(endpoint_errors) * 35,
-                            ),
-                        )
-                    # ── ADD THIS SNIPPET TO CALCULATE AND DISPLAY -XPE TERMINALS ─────────
-                    # Count rows where Line-Function is GNYE
-                    gnyc_count = (df_stage1['Line-Function'] == 'GNYE').sum()
-                    # Divide by 2 and round up
-                    xpe_terminals = -(-gnyc_count // 2)
-                
-                    group_counts = {
-                        group: len(symbols)
-                        for group, symbols in group_symbols.items()
-                    }
-
-                    standard_groups_df = pd.DataFrame(
-                        [
-                            {
-                                "Group": group,
-                                "Components": count,
-                            }
-                            for group, count in group_counts.items()
-                            if "SWING" not in str(group).upper()
-                        ]
-                    )
-
-                    swing_groups_df = pd.DataFrame(
-                        [
-                            {
-                                "Group": group,
-                                "Components": count,
-                            }
-                            for group, count in group_counts.items()
-                            if "SWING" in str(group).upper()
-                        ]
-                    )
-
-                    if not standard_groups_df.empty:
-                        standard_groups_df = (
-                            standard_groups_df
-                            .sort_values(
-                                by=["Components", "Group"],
-                                ascending=[False, True],
-                            )
-                            .reset_index(drop=True)
-                        )
-
-                    if not swing_groups_df.empty:
-                        swing_groups_df = (
-                            swing_groups_df
-                            .sort_values(
-                                by=["Components", "Group"],
-                                ascending=[False, True],
-                            )
-                            .reset_index(drop=True)
-                        )
-
-                    st.markdown(
-                        '<div class="section-heading">🧩 ADV_WS Group Summary</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                    all_groups_col, swing_groups_col = st.columns(2)
-
-                    with all_groups_col:
-                        st.markdown(
-                            '<div class="group-column-title">Standard Groups</div>',
-                            unsafe_allow_html=True,
-                        )
-
-                        if standard_groups_df.empty:
-                            st.info("No standard groups found.")
-                        else:
-                            st.dataframe(
-                                standard_groups_df,
-                                use_container_width=True,
-                                hide_index=True,
-                                height=min(
-                                    500,
-                                    40 + len(standard_groups_df) * 35,
-                                ),
-                            )
-
-                    with swing_groups_col:
-                        st.markdown(
-                            '<div class="group-column-title">SWING Groups</div>',
-                            unsafe_allow_html=True,
-                        )
-
-                        if swing_groups_df.empty:
-                            st.info("No SWING groups found.")
-                        else:
-                            st.dataframe(
-                                swing_groups_df,
-                                use_container_width=True,
-                                hide_index=True,
-                                height=min(
-                                    500,
-                                    40 + len(swing_groups_df) * 35,
-                                ),
-                            )
-
-                    st.markdown(
-                        '<div class="section-heading">🛡️ Required XPE Terminals</div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.metric("Required terminals", xpe_terminals)
-                    # ── Terminal Count Statistics ───────────────────────────
-                    terminal_groups = {
-                        "X0100": [
-                            "-X0100:L3",
-                            "-X0100:N",
-                            "-X0100:230VL2",
-                            "-X0100:230VN2",
-                        ],
-                        "X0101": [
-                            "-X0101:230VL",
-                            "-X0101:230VN",
-                        ],
-                        "X0102": [
-                            "-X0102:24VDC",
-                            "-X0102:24VDC1",
-                            "-X0102:24VDC2",
-                            "-X0102:24VDC3",
-                            "-X0102:0VDC",
-                        ],
-                    }
-
-                    counts = {}
-
-                    for terminal_list in terminal_groups.values():
-                        for terminal in terminal_list:
-                            counts[terminal] = (
-                                (df_stage1["Name"] == terminal).sum()
-                                + (df_stage1["Name.1"] == terminal).sum()
-                            )
-
-                    blocks_needed = {
-                        terminal: math.ceil(count / 6)
-                        for terminal, count in counts.items()
-                    }
-
-                    st.markdown(
-                        '<div class="section-heading">🔌 Terminal Blocks Required</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                    max_terminal_length = max(
-                        len(terminal)
-                        for terminal_list in terminal_groups.values()
-                        for terminal in terminal_list
-                    )
-
-                    for group_name, terminal_list in terminal_groups.items():
-                        used_terminals = [
-                            terminal
-                            for terminal in terminal_list
-                            if counts.get(terminal, 0) > 0
-                        ]
-
-                        if not used_terminals:
-                            continue
-
-                        st.markdown(
-                            f'<div class="terminal-group-title">'
-                            f'════════════ {group_name} ════════════'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-
-                        for terminal in used_terminals:
-                            count = counts[terminal]
-                            blocks = blocks_needed[terminal]
-                            block_word = "block" if blocks == 1 else "blocks"
-                            occurrence_word = (
-                                "occurrence"
-                                if count == 1
-                                else "occurrences"
-                            )
-                            aligned_terminal = terminal.ljust(
-                                max_terminal_length
-                            )
-
-                            st.markdown(
-                                f'<div class="terminal-row">'
-                                f'{aligned_terminal} : '
-                                f'{count} {occurrence_word} '
-                                f'→ {blocks} {block_word}'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
-
-                    # Prepare for editing and identify blank cells
-                    df_stage1 = stage1_pipeline_14(df_stage1)
-                    blank_cells = identify_blank_cells(df_stage1)
-
-                    # Store in session state
-                    st.session_state["stage1_data"] = df_stage1
-                    st.session_state["stage1_upload_id"] = uploaded_file.file_id
-                    st.session_state["suggested_wire"] = t901_wire_suggestion(df_original)
-                    st.session_state["stage1_run"] = st.session_state.get("stage1_run", 0) + 1
-                    st.session_state["blank_cells"] = blank_cells
-
-                    # Show blank cell statistics
-                    total_blank_cells = sum(len(rows) for rows in blank_cells.values())
-                    total_rows = df_stage1.shape[0]
-                    total_cols = df_stage1.shape[1]
-
-                    st.markdown(
-                        '<div class="section-heading">📊 Data Overview</div>',
-                        unsafe_allow_html=True,
-                    )
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("🔢 Total Rows", f"{total_rows:,}")
-                    c2.metric("📋 Columns", f"{total_cols}")
-                    c3.metric("⚠️ Blank Cells", f"{total_blank_cells:,}")
-                    c4.metric("🗑️ Removed Duplicates", f"{removed_duplicates}")
-
-                    if total_blank_cells > 0:
-                        st.markdown(
-                            f'<div class="status-warning">⚠️ **{total_blank_cells}** blank cells detected across **{len(blank_cells)}** columns. Please fill them in the editor below.</div>',
-                            unsafe_allow_html=True,
-                        )
-
-    # -------- Blank cell editor & download block -------- #
-    if uploaded_file is not None and st.session_state.get("stage1_upload_id") == uploaded_file.file_id:
-        st.markdown("---")
-        full_df = st.session_state["stage1_data"].copy()
-        blank_cells = st.session_state.get("blank_cells", {})
-        total_blank_cells = sum(len(rows) for rows in blank_cells.values())
-        if total_blank_cells > 0:
-            st.markdown(
-                '<div class="section-heading">🛠️ Interactive Data Editor</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown("**Instructions:** Fill in missing values below. Only rows with blanks are shown. Changes are auto-saved.")
-
-            summary_df = pd.DataFrame({
-                "Column": list(blank_cells.keys()),
-                "Row Numbers": [", ".join(map(str, rows)) for rows in blank_cells.values()]
-            }).reset_index(drop=True)
-            st.dataframe(summary_df, use_container_width=True)
-
-            # Show only rows with blanks in the editor
-            all_blank_row_indices = set()
-            for rows in blank_cells.values():
-                all_blank_row_indices.update(rows)
-            if all_blank_row_indices:
-                all_blank_row_indices = sorted(list(all_blank_row_indices))
-                st.session_state["all_blank_row_indices"] = all_blank_row_indices
-                df_with_blanks = full_df.loc[all_blank_row_indices].copy()
-                df_with_blanks = stage1_pipeline_14(df_with_blanks)
-
-                # Friendly column headers
-                column_config = {}
-                for col in df_with_blanks.columns:
-                    if col in ("Name", "Name.1"):
-                        column_config[col] = st.column_config.TextColumn(
-                            col, help=f"Component identifier – {len(blank_cells.get(col, []))} blank cells", width="medium", required=True)
-                    elif col == "Wireno":
-                        column_config[col] = st.column_config.TextColumn("Wire-Tag", help=f"Wire tag – {len(blank_cells.get(col, []))} blank cells", width="small")
-                    elif col == "Line-Name":
-                        column_config[col] = st.column_config.TextColumn("Cross-Section", help=f"Cross-section – {len(blank_cells.get(col, []))} blank cells", width="small")
-                    elif col == "Line-Function":
-                        column_config[col] = st.column_config.TextColumn("Wire-Color", help=f"Wire colour – {len(blank_cells.get(col, []))} blank cells", width="small")
-                    elif col == "DaisyNo":
-                        column_config[col] = st.column_config.TextColumn(col, help="Group identifier", width="small")
-                    else:
-                        column_config[col] = st.column_config.TextColumn(col, help=f"{len(blank_cells.get(col, []))} blank cells", width="medium")
-
-                # Editor + save on change
-                def update_blank_cells():
-                    editor_state = st.session_state.data_editor
-                    if "edited_rows" in editor_state and editor_state["edited_rows"]:
-                        full_df = st.session_state["stage1_data"]
-                        all_blank_row_indices = st.session_state.get("all_blank_row_indices", [])
-                        for row_idx, changes in editor_state["edited_rows"].items():
-                            for col, new_value in changes.items():
-                                if row_idx < len(all_blank_row_indices):
-                                    original_idx = all_blank_row_indices[row_idx]
-                                    full_df.at[original_idx, col] = new_value
-                        st.session_state["stage1_data"] = full_df
-                        st.session_state["blank_cells"] = identify_blank_cells(full_df)
-
-                st.data_editor(
-                    df_with_blanks,
-                    column_config=column_config,
-                    use_container_width=True,
-                    height=600,
-                    num_rows="fixed",
-                    key="data_editor",
-                    on_change=update_blank_cells
-                )
-
-        st.markdown("### Suggested Wires")
-        suggestion = st.session_state.get("suggested_wire")
-        if suggestion is None:
-            st.info("T901 was not found in the source Excel. No wire was suggested.")
+def stage1_pipeline_7_1(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    targets = ["-X923:N", "-X924:N", "-X927:N", "-X928:N"]
+    has_flags = {key: False for key in targets}
+    stored_line_name = None
+    stored_line_function = None
+    for _, row in df.iterrows():
+        names = [row['Name'], row['Name.1']]
+        if "-X923:N" in names or "-X924:N" in names:
+            has_flags["-X923:N"] = "-X923:N" in names or has_flags["-X923:N"]
+            has_flags["-X924:N"] = "-X924:N" in names or has_flags["-X924:N"]
+            if stored_line_name is None:
+                stored_line_name = row.get("Line-Name", "")
+                stored_line_function = row.get("Line-Function", "")
+        for val in ("-X927:N", "-X928:N"):
+            if val in names:
+                has_flags[val] = True
+        if all(has_flags.values()) and stored_line_name is not None:
+            break
+    base_cols = df.columns.tolist()
+    def create_new_row(target_name1_val):
+        new_row = {col: "" for col in base_cols}
+        new_row["Name"] = "-X0100:N"
+        new_row["Name.1"] = target_name1_val
+        new_row["Line-Name"] = stored_line_name if stored_line_name is not None else "1,5"
+        new_row["Line-Function"] = stored_line_function if stored_line_function is not None else ""
+        return new_row
+    new_rows = []
+    for val in targets:
+        if has_flags[val]:
+            new_rows.append(create_new_row(val))
+    if new_rows:
+        df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+    delete_pairs = {
+        ("-X923:N", "-X923:N"),
+        ("-X924:N", "-X924:N"),
+        ("-X923:N", "-X924:N"),
+        ("-X924:N", "-X923:N"),
+        ("-X924:N", "-X927:N"),
+        ("-X923:N", "-X927:N"),
+        ("-X927:N", "-X927:N"),
+        ("-X928:N", "-X927:N"),
+        ("-X928:N", "-X928:N"),
+        ("-X923:N", "-X928:N"),
+        ("-X924:N", "-X928:N"),
+        ("-X927:N", "-X928:N"),
+        # Extended pairs with :230VN
+        ("-X923:230VN", "-X923:230VN"),
+        ("-X924:230VN", "-X924:230VN"),
+        ("-X923:230VN", "-X924:230VN"),
+        ("-X924:230VN", "-X923:230VN"),
+        ("-X924:230VN", "-X927:230VN"),
+        ("-X923:230VN", "-X927:230VN"),
+        ("-X927:230VN", "-X927:230VN"),
+        ("-X928:230VN", "-X927:230VN"),
+        ("-X928:230VN", "-X928:230VN"),
+        ("-X923:230VN", "-X928:230VN"),
+        ("-X924:230VN", "-X928:230VN"),
+        ("-X927:230VN", "-X928:230VN"),
+        ("-X0100:L", "-X0100:L3"),
+    }
+    for idx in reversed(df.index):
+        row = df.loc[idx]
+        val_pair = (row["Name"], row["Name.1"])
+        if val_pair in delete_pairs:
+            df.drop(index=idx, inplace=True)
+    # Wireno fill
+    wireno_map = {}
+    for idx, row in df.iterrows():
+        for key in [row["Name"], row["Name.1"]]:
+            wireno_val = row.get("Wireno", "")
+            if pd.notna(wireno_val) and wireno_val != "":
+                if key not in wireno_map:
+                    wireno_map[key] = wireno_val
+    def fill_wireno(row):
+        if pd.isna(row.get("Wireno", "")) or row.get("Wireno", "") == "":
+            for key in [row["Name"], row["Name.1"]]:
+                if key in wireno_map:
+                    return wireno_map[key]
+            return ""
         else:
-            st.caption("Edit the suggested wire or check Delete to exclude it from the EPLAN export.")
-            edited = st.data_editor(
-                pd.DataFrame([{**suggestion, "Delete": False}]),
-                column_config={
-                    "Wireno": st.column_config.TextColumn("Wire-Tag", required=True),
-                    "Line-Name": st.column_config.TextColumn("Cross-Section", required=True),
-                    "Line-Function": st.column_config.TextColumn("Wire-Color", required=True),
-                    "Delete": st.column_config.CheckboxColumn("Delete", default=False),
-                },
-                hide_index=True,
-                num_rows="fixed",
-                use_container_width=True,
-                key=f'suggested_wire_{st.session_state["stage1_run"]}',
-            ).iloc[0]
-            full_df = apply_suggested_wire(full_df, suggestion, edited)
+            return row["Wireno"]
+    df["Wireno"] = df.apply(fill_wireno, axis=1)
+    return df.reset_index(drop=True)
 
-        # Download section
-        st.markdown("---")
-        buffer_final = BytesIO()
-        full_df.to_excel(buffer_final, index=False)
-        base = uploaded_file.name[:8]
-        download_name = f"{base}_ADV_EPLAN_IMPORT.xlsx"
-        st.download_button(
-            "📥 Download Final Data",
-            buffer_final.getvalue(),
-            file_name=download_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+def stage1_pipeline_8(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if not all(col in df.columns for col in ['Name', 'Name.1']):
+        return df
+
+    # 0) Identify X102 rows to force-keep
+    force_keep = {
+        idx
+        for idx, row in df.iterrows()
+        if str(row['Name']).startswith('-X102:') or str(row['Name.1']).startswith('-X102:')
+    }
+
+    # 1) Build connectivity map, skipping forced rows
+    value_to_rows = defaultdict(set)
+    for idx, row in df.iterrows():
+        if idx in force_keep:
+            continue
+        name = str(row['Name']).strip()
+        name1 = str(row['Name.1']).strip()
+        if name and name != 'nan':
+            value_to_rows[name].add(idx)
+        if name1 and name1 != 'nan':
+            value_to_rows[name1].add(idx)
+
+    parent = {}
+    def find(x):
+        parent.setdefault(x, x)
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+    def union(a, b):
+        pa, pb = find(a), find(b)
+        if pa != pb:
+            parent[pa] = pb
+
+    # 2) Initialize all indices
+    for idx in df.index:
+        parent[idx] = idx
+
+    # 3) Union only groups with >1 connection, skipping forced rows
+    for group in value_to_rows.values():
+        members = list(group)
+        for other in members[1:]:
+            union(members[0], other)
+
+    # 4) Build daisy‐chain numbers
+    groups = defaultdict(list)
+    for idx in df.index:
+        groups[find(idx)].append(idx)
+
+    daisy_mapping = {}
+    daisy_no = 1
+    for members in groups.values():
+        if len(members) > 1:
+            for idx in members:
+                daisy_mapping[idx] = daisy_no
+            daisy_no += 1
+        else:
+            daisy_mapping[members[0]] = 0
+
+    # 5) Enforce DaisyNo=0 for forced rows
+    for idx in force_keep:
+        daisy_mapping[idx] = 0
+
+    df['DaisyNo'] = df.index.map(daisy_mapping)
+
+    # 6) Final sort
+    df = df.sort_values(by=['DaisyNo', 'Wireno'], ascending=[True, True]).reset_index(drop=True)
+    return df
+
+
+
+# ------------------------------------------------------------------ #
+#  Stage-1 Pipeline 9 – assign “Line-Name” / “Line-Function” values
+#  and delete superfluous 2,5 rows that are NOT battery related
+# ------------------------------------------------------------------ #
+
+
+def stage1_pipeline_9(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    # 0) Force-keep any -X102:* rows
+    force_keep = df[
+        df['Name'].str.startswith('-X102:', na=False) |
+        df['Name.1'].str.startswith('-X102:', na=False)
+    ]
+
+    # 1) Work on the remaining rows
+    working = df.drop(force_keep.index)
+
+    # ── original pipeline_9 logic ──
+    line_name_values = {
+        '-F903:2','-F903:N2','-F903.1:2','-F903.1:N2','-F904:2','-F904.1:N2',
+        '-T901','-C903:10','-C903:11','-F903.2:2','-F903.2:1','-F901.1:1',
+        '-F901:2','-F901:N2','-F903:1','-F903.1:1','-F904:1','-F904.1:1',
+        '-K918:11','-K918:14','-F902:2','-F902:N2','-G90A3:OUT+','-G90A3:OUT-',
+        '-T901:0V','-T901:0 V',"-T901:0 V'",'-F901:4',"-T901:115 V'",'-T901:400V',
+        '-T901:230 V'
+    }
+    exact_mask = working['Name'].isin(line_name_values) | working['Name.1'].isin(line_name_values)
+    working.loc[exact_mask, 'Line-Name'] = '1,5'
+
+    pat_bat = re.compile(r'-G.*BAT', re.IGNORECASE)
+    pat_in  = re.compile(r'-G.*IN',  re.IGNORECASE)
+    mask_bat = working['Name'].str.contains(pat_bat, na=False) | working['Name.1'].str.contains(pat_bat, na=False)
+    mask_in  = working['Name'].str.contains(pat_in,  na=False) | working['Name.1'].str.contains(pat_in,  na=False)
+    working.loc[mask_bat,                   'Line-Name'] = '2,5'
+    working.loc[mask_in & ~mask_bat,        'Line-Name'] = '1,5'
+
+    mask_bu = (working['Name']=='-F104:5') | (working['Name.1']=='-F104:5')
+    working.loc[mask_bu, 'Line-Function'] = 'BU'
+
+    new_symbols = line_name_values  # same set as above
+    mask_new = working['Name'].isin(new_symbols) | working['Name.1'].isin(new_symbols)
+    working.loc[mask_new & working['Line-Name'].eq(""), 'Line-Name'] = '1,5'
+
+    has_g90  = working[['Name','Name.1']].apply(lambda s: s.str.contains(r'\bG90A3\b',na=False)).any().any()
+    has_out = working[['Name','Name.1']].apply(lambda s: s.eq('G90A3:OUT+')).any().any()
+    if has_g90 and not has_out:
+        base = list(working.columns)
+        new = {c:"" for c in base}
+        new.update({
+            'Name':'G90A3:OUT+','Name.1':'-X0102:24VDC','Wireno':'24VDC',
+            'Line-Name':'2,5','Line-Function':'DBU'
+        })
+        working = pd.concat([working, pd.DataFrame([new])], ignore_index=True)
+        
+    # old 2,5 filtering rule
+    # mask_25 = working['Line-Name']=='2,5'
+    # mask_bat = working['Name'].str.contains('BAT',na=False,case=False) | working['Name.1'].str.contains('BAT',na=False,case=False)
+    # working = working[~(mask_25 & ~mask_bat)]
+
+    mask_25 = working['Line-Name']=='2,5'
+    mask_bat = working['Name'].str.contains('BAT',na=False,case=False) | working['Name.1'].str.contains('BAT',na=False,case=False)
+    mask_transformer = working['Name'].str.contains(r'-T8\d', na=False, regex=True) | working['Name.1'].str.contains(r'-T8\d', na=False, regex=True)
+    mask_10_wires = working['Wireno'].astype(str).str.strip().str.startswith('10:')
+    working = working[~(mask_25 & ~mask_bat & ~mask_transformer & ~mask_10_wires)]
+
+    # ── end original logic ──
+
+    # 2) Re-attach the -X102:* rows
+    result = pd.concat([working, force_keep], ignore_index=True)
+
+    # 3) Reset index (and preserve DaisyNo from prior stage)
+    return result.reset_index(drop=True)
+
+
+
+def parse_component_functions(df_f):
+    # Expects: one-column DataFrame, filter only those starting with '='
+    func_col = df_f.columns[0]
+    results = {}
+    pat = re.compile(r"^=([A-Z0-9_]+)-(.+)$", re.IGNORECASE)
+
+    raw_values = df_f[func_col].tolist()
+
+    for idx, val in enumerate(raw_values):
+        if not isinstance(val, str) or not val.strip().startswith("="):
+            continue
+        stripped = val.strip()
+        m = pat.match(stripped)
+        if m:
+            group = m.group(1).upper()
+            symbol = "-" + m.group(2).strip() if not m.group(2).startswith("-") else m.group(2).strip()
+            results.setdefault(group, []).append(symbol)
+
+    return results
+
+
+# ==========================================================
+# PIPELINE 10 – BENDRAS PASKIRSTYMO GRANDINIŲ BRANDUOLYS
+# Ši funkcija tiesiogiai app.py nekviečiama.
+# Ją kviečia P11 (24 VDC) ir P12 (230 VAC).
+# ==========================================================
+def stage1_pipeline_10(df: pd.DataFrame, group_symbols: dict, config: dict) -> pd.DataFrame:
+    """
+    Bendras paskirstymo grandinių algoritmas.
+
+    config pagrindiniai laukai:
+      wirenos                – apdorojimo tvarka;
+      terminal_map           – Wireno -> tikslus terminalas arba terminalo komponentas;
+      default_function       – Wireno -> Line-Function;
+      main_line_name         – MAIN ir maitinimo kelio skerspjūvis;
+      daisy_line_name        – vartotojų daisy skerspjūvis;
+      source_modes           – Wireno -> source parinkimo būdas;
+      paired_main            – pvz. 0VDC turi naudoti 24VDC komponentą;
+      direct_terminal_main   – MAIN yra tiesioginis terminalo kaimynas;
+      relay_supply_groups    – 11->14, 21->24... puslapio laidų taisymas;
+      downstream_wirenos     – grupės, pagal kurias vertinama pagrindinė šaka.
+    """
+    import re
+    from collections import defaultdict
+
+    required_columns = {"Name", "Name.1", "Wireno"}
+    if not required_columns.issubset(df.columns):
+        return df.copy()
+
+    df = df.copy().fillna("")
+
+    for column in df.columns:
+        df[column] = (
+            df[column]
+            .astype(str)
+            .replace(["nan", "None", "none", "NULL", "null"], "")
         )
 
-# ── Stage 2: KOMAX UI ─────────────────────────────────────────────────────────
-elif st.session_state.stage == "komax":
-    st.header("Stage 2: Convert for KOMAX")
+    if "DaisyNo" not in df.columns:
+        df["DaisyNo"] = ""
 
-    uploaded_csv = st.file_uploader(
-        "📁 Upload your KOMAX CSV file (auto‐detected delimiter)…",
-        type=["csv"],
-        key="komax_csv",
+    base_columns = list(df.columns)
+
+    wirenos = tuple(config["wirenos"])
+    terminal_map = dict(config["terminal_map"])
+    default_function = dict(config["default_function"])
+
+    main_line_name = str(config.get("main_line_name", "1,5"))
+    daisy_line_name = str(config.get("daisy_line_name", "0,75"))
+
+    source_modes = dict(config.get("source_modes", {}))
+    paired_main = dict(config.get("paired_main", {}))
+    direct_terminal_main = set(config.get("direct_terminal_main", set()))
+    relay_supply_groups = set(config.get("relay_supply_groups", set()))
+    downstream_wirenos = set(config.get("downstream_wirenos", set()))
+
+    page_wire_pattern = re.compile(
+        config.get("page_wire_pattern", r"^(?:90|91):\d+$"),
+        re.IGNORECASE,
     )
-    if uploaded_csv:
-        try:
-            df_stage2 = stage2_pipeline_1(uploaded_csv)
-            df_stage2 = stage2_pipeline_2(df_stage2)
-            # df_stage2 = stage2_pipeline_3(df_stage2)
-            df_stage2 = stage2_pipeline_4(df_stage2)
-            df_stage2 = stage2_pipeline_5(df_stage2)
-        except Exception as e:
-            st.error(f"Error processing CSV: {e}")
-            st.stop()
 
-        st.markdown("### ✅ Stage 2 Result (with Daisy Chain Detection)")
-        st.dataframe(df_stage2.head(10), use_container_width=True, height=300)
+    def clean(value):
+        value = str(value).strip()
+        return "" if value.lower() in {"nan", "none", "null"} else value
 
-        buf = BytesIO()
-        df_stage2.to_csv(
-            buf,
-            index=False,
-            sep=";",
-            encoding="utf-8-sig"
+    def split_endpoint(endpoint):
+        endpoint = clean(endpoint)
+        if ":" not in endpoint:
+            return endpoint, ""
+        return endpoint.rsplit(":", 1)
+
+    def component_name(endpoint):
+        component, _ = split_endpoint(endpoint)
+        return component
+
+    def normalized_pair(name, name_1):
+        return tuple(sorted((clean(name), clean(name_1))))
+
+    def make_empty_row():
+        return {column: "" for column in base_columns}
+
+    all_symbols = {
+        clean(value)
+        for column in ("Name", "Name.1")
+        for value in df[column]
+        if clean(value)
+    }
+
+    # Originalių metaduomenų žemėlapis.
+    symbol_meta = defaultdict(dict)
+    for _, row in df.iterrows():
+        wireno = clean(row.get("Wireno", ""))
+        if wireno not in wirenos:
+            continue
+
+        for side in ("Name", "Name.1"):
+            symbol = clean(row.get(side, ""))
+            if symbol:
+                symbol_meta[wireno][symbol] = {
+                    "Line-Name": clean(row.get("Line-Name", "")),
+                    "Line-Function": clean(row.get("Line-Function", "")),
+                }
+
+    def get_row_meta(wireno, symbol):
+        return symbol_meta.get(wireno, {}).get(symbol, {})
+
+    # Atskiras grafas kiekvienam Wireno.
+    graphs = {
+        wireno: defaultdict(list)
+        for wireno in wirenos
+    }
+
+    for index, row in df.iterrows():
+        wireno = clean(row.get("Wireno", ""))
+        if wireno not in graphs:
+            continue
+
+        name = clean(row.get("Name", ""))
+        name_1 = clean(row.get("Name.1", ""))
+
+        if not name or not name_1 or name == name_1:
+            continue
+
+        graphs[wireno][name].append((name_1, index))
+        graphs[wireno][name_1].append((name, index))
+
+    def resolve_terminal(wireno):
+        """
+        Suranda realų paskirstymo terminalo kontaktą.
+
+        terminal_map gali turėti:
+        - tikslų simbolį, pvz. -X0102:24VDC;
+        - tik komponentą, pvz. -X0100 arba -X0101.
+
+        Kai pateiktas tik komponentas, kontaktas paimamas iš realių
+        to Wireno jungčių. Todėl F903/L3 gali būti prijungtas prie
+        -X0100:L3, o F903/N – prie -X0100:N.
+        """
+        terminal_hint = clean(terminal_map.get(wireno, ""))
+        if not terminal_hint:
+            return ""
+
+        graph = graphs.get(wireno, {})
+
+        # Jei konfigūracijoje pateiktas tikslus kontaktas ir jis yra faile.
+        if terminal_hint in graph:
+            return terminal_hint
+
+        # Jei pateiktas tik komponentas, randamas realus jo kontaktas.
+        candidates = [
+            symbol
+            for symbol in graph
+            if component_name(symbol) == terminal_hint
+        ]
+
+        if not candidates:
+            return ""
+
+        # Dažniausiai vienas paskirstymo kontaktas turi dvi jungtis:
+        # MAIN ir daisy. Todėl pirmiausia renkamės didžiausio laipsnio mazgą.
+        candidates.sort(
+            key=lambda symbol: (
+                len(graph.get(symbol, [])),
+                symbol,
+            ),
+            reverse=True,
         )
 
-        base2 = uploaded_csv.name[:8]
-        download_name2 = f"{base2}_ADV_DLW_IMPORT.csv"
+        return candidates[0]
+
+    def branch_from_terminal(wireno, terminal, first_neighbour):
+        """
+        Surenka vieną šaką nuo paskirstymo terminalo.
+        Jei šaka šakojasi, paimamas ilgiausias kelias iki lapo.
+        """
+        graph = graphs[wireno]
+
+        best_nodes = [terminal, first_neighbour]
+        best_rows = []
+
+        for neighbour, row_index in graph.get(terminal, []):
+            if neighbour == first_neighbour:
+                best_rows = [row_index]
+                break
+
+        stack = [
+            (
+                first_neighbour,
+                terminal,
+                [terminal, first_neighbour],
+                best_rows.copy(),
+            )
+        ]
+
+        while stack:
+            current, previous, nodes, rows = stack.pop()
+
+            next_edges = [
+                (neighbour, row_index)
+                for neighbour, row_index in graph.get(current, [])
+                if neighbour != previous and neighbour not in nodes
+            ]
+
+            if not next_edges:
+                if len(rows) > len(best_rows):
+                    best_nodes = nodes
+                    best_rows = rows
+                continue
+
+            for neighbour, row_index in next_edges:
+                stack.append(
+                    (
+                        neighbour,
+                        current,
+                        nodes + [neighbour],
+                        rows + [row_index],
+                    )
+                )
+
+        return best_nodes, best_rows
+
+    def page_connection_count(endpoint):
+        component = component_name(endpoint)
+        count = 0
+
+        for _, row in df.iterrows():
+            row_wireno = clean(row.get("Wireno", ""))
+            if not page_wire_pattern.fullmatch(row_wireno):
+                continue
+
+            name = clean(row.get("Name", ""))
+            name_1 = clean(row.get("Name.1", ""))
+
+            if (
+                component_name(name) == component
+                or component_name(name_1) == component
+            ):
+                count += 1
+
+        return count
+
+    def downstream_group_score(endpoint):
+        component = component_name(endpoint)
+        score = 0
+
+        for _, row in df.iterrows():
+            row_wireno = clean(row.get("Wireno", ""))
+            name = clean(row.get("Name", ""))
+            name_1 = clean(row.get("Name.1", ""))
+
+            if (
+                component_name(name) != component
+                and component_name(name_1) != component
+            ):
+                continue
+
+            if row_wireno in downstream_wirenos:
+                score += 10
+            elif page_wire_pattern.fullmatch(row_wireno):
+                score += 3
+
+        return score
+
+
+    def find_wireno_origin(wireno, nodes, rows):
+        """
+        Dabartinio Wireno šakoje randa pirmą komponentą nuo terminalo,
+        kurio kitas kontaktas turi kitą Wireno.
+
+        Komponento pavadinimas nėra hardcodintas.
+        """
+        best = None
+
+        for position, symbol in enumerate(nodes[1:], start=1):
+            component = component_name(symbol)
+
+            if not component:
+                continue
+
+            foreign_wirenos = set()
+
+            for _, row in df.iterrows():
+                row_wireno = clean(row.get("Wireno", ""))
+
+                if not row_wireno or row_wireno == wireno:
+                    continue
+
+                name = clean(row.get("Name", ""))
+                name_1 = clean(row.get("Name.1", ""))
+
+                if (
+                    component_name(name) == component
+                    or component_name(name_1) == component
+                ):
+                    foreign_wirenos.add(row_wireno)
+
+            if not foreign_wirenos:
+                continue
+
+            has_named_supply = any(
+                not page_wire_pattern.fullmatch(other_wireno)
+                for other_wireno in foreign_wirenos
+            )
+
+            candidate = {
+                "strength": 2 if has_named_supply else 1,
+                "distance": position,
+                "symbol": symbol,
+            }
+
+            if best is None:
+                best = candidate
+                continue
+
+            if candidate["strength"] > best["strength"]:
+                best = candidate
+                continue
+
+            if (
+                candidate["strength"] == best["strength"]
+                and candidate["distance"] < best["distance"]
+            ):
+                best = candidate
+
+        return best
+
+    def select_source_branch(wireno):
+        terminal = resolve_terminal(wireno)
+        graph = graphs[wireno]
+
+        if not terminal:
+            return [], [], ""
+
+        mode = source_modes.get(wireno, "shortest")
+        candidates = []
+        seen = set()
+
+        for neighbour, _ in graph.get(terminal, []):
+            if neighbour in seen:
+                continue
+
+            seen.add(neighbour)
+
+            nodes, rows = branch_from_terminal(
+                wireno,
+                terminal,
+                neighbour,
+            )
+
+            endpoint = nodes[-1]
+            branch_length = len(rows)
+
+            if mode == "dc_primary":
+                # 24VDC šakoje ieškome OUT+ ne tik tiesioginiame X0102
+                # kaimyne, bet visame rastame kelyje.
+                out_plus_position = None
+
+                for position, node in enumerate(nodes[1:], start=1):
+                    if node.upper().endswith(":OUT+"):
+                        out_plus_position = position
+                        break
+
+                has_out_plus = out_plus_position is not None
+
+                score = (
+                    1 if has_out_plus else 0,
+                    downstream_group_score(neighbour),
+                    page_connection_count(neighbour),
+                    branch_length,
+                )
+
+                # Jei OUT+ rastas, MAIN kelias baigiasi būtent ties juo.
+                if has_out_plus:
+                    nodes = nodes[:out_plus_position + 1]
+                    rows = rows[:out_plus_position]
+                    endpoint = nodes[-1]
+
+            elif mode == "wireno_origin":
+                origin = find_wireno_origin(
+                    wireno,
+                    nodes,
+                    rows,
+                )
+
+                # 230 VAC MAIN turi būti tiesioginis paskirstymo terminalo
+                # kaimynas. Saugikliui teikiama pirmenybė prieš kitą aparatą.
+                direct_is_fuse = component_name(neighbour).upper().startswith("-F")
+
+                score = (
+                    1 if direct_is_fuse else 0,
+                    page_connection_count(neighbour),
+                    origin["strength"] if origin else 0,
+                    -branch_length,
+                )
+
+                nodes = nodes[:2]
+                rows = rows[:1]
+                endpoint = neighbour
+
+            elif mode == "shortest":
+                score = (
+                    page_connection_count(neighbour),
+                    -branch_length,
+                )
+
+            elif mode == "direct":
+                score = (-branch_length,)
+
+            else:
+                score = (-branch_length,)
+
+            candidates.append({
+                "score": score,
+                "nodes": nodes,
+                "rows": rows,
+                "endpoint": endpoint,
+            })
+
+        if not candidates:
+            return [], [], ""
+
+        candidates.sort(
+            key=lambda item: item["score"],
+            reverse=True,
+        )
+
+        selected = candidates[0]
+
+        return (
+            selected["nodes"],
+            selected["rows"],
+            selected["endpoint"],
+        )
+
+    generated_rows = []
+    generated_pairs = set()
+
+    def add_generated_row(
+        name,
+        name_1,
+        wireno,
+        daisy_no,
+        line_name,
+        line_function,
+    ):
+        if not name or not name_1 or name == name_1:
+            return
+
+        pair = normalized_pair(name, name_1)
+        if pair in generated_pairs:
+            return
+
+        generated_pairs.add(pair)
+
+        row = make_empty_row()
+        row.update({
+            "Name": name,
+            "Name.1": name_1,
+            "Wireno": wireno,
+            "Line-Name": line_name,
+            "Line-Function": line_function,
+            "DaisyNo": str(daisy_no),
+        })
+        generated_rows.append(row)
+
+    existing_wirenos = {
+        clean(value)
+        for value in df["Wireno"]
+    }
+
+    main_source_symbols = set()
+    main_path_symbols = set()
+    rows_to_remove = set()
+
+    # Įsimenami jau apdorotų MAIN komponentai.
+    main_components = {}
+
+    # BŪTINA: ciklas eina tiksliai config["wirenos"] tvarka.
+    # P11 konfigūracijoje 24VDC yra prieš 0VDC.
+    for wireno in wirenos:
+        terminal = resolve_terminal(wireno)
+
+        if not terminal:
+            continue
+
+        if wireno not in existing_wirenos:
+            continue
+
+        path_nodes, path_rows, endpoint = select_source_branch(wireno)
+
+        if not endpoint:
+            continue
+
+        main_source = endpoint
+
+        # Pvz. 0VDC ieško tiesioginio kaimyno iš to paties
+        # komponento, kuris buvo rastas apdorojant 24VDC.
+        paired_with = paired_main.get(wireno)
+        preferred_component = main_components.get(paired_with, "")
+
+        if preferred_component:
+            matching_neighbour = ""
+
+            for neighbour, _ in graphs[wireno].get(terminal, []):
+                if component_name(neighbour) == preferred_component:
+                    matching_neighbour = neighbour
+                    break
+
+            if matching_neighbour:
+                path_nodes, path_rows = branch_from_terminal(
+                    wireno,
+                    terminal,
+                    matching_neighbour,
+                )
+                main_source = matching_neighbour
+            elif len(path_nodes) >= 2:
+                main_source = path_nodes[1]
+
+        elif source_modes.get(wireno) == "shortest" and len(path_nodes) >= 2:
+            main_source = path_nodes[1]
+
+        # Pvz. 24VDC1/2/3 MAIN turi būti tiesioginis X0102 kaimynas.
+        if wireno in direct_terminal_main and len(path_nodes) >= 2:
+            main_source = path_nodes[1]
+
+        main_components[wireno] = component_name(main_source)
+
+        main_source_symbols.add(main_source)
+        main_path_symbols.update(path_nodes)
+        main_path_symbols.add(main_source)
+
+        # MAIN maitinimo kelias.
+        for index in path_rows:
+            if index not in df.index:
+                continue
+            df.at[index, "Line-Name"] = main_line_name
+            df.at[index, "DaisyNo"] = "0"
+
+        # Tik P11 DC konfigūracijoje aktyvi 11->14, 21->24... taisyklė.
+        if wireno in relay_supply_groups:
+            relay_component, relay_pin = split_endpoint(main_source)
+            supply_pin = ""
+
+            if relay_pin.isdigit():
+                pin_number = int(relay_pin)
+                if pin_number % 10 == 1:
+                    supply_pin = str(pin_number + 3)
+
+            if supply_pin:
+                relay_supply_endpoint = f"{relay_component}:{supply_pin}"
+
+                for index, row in df.iterrows():
+                    row_wireno = clean(row.get("Wireno", ""))
+                    if not page_wire_pattern.fullmatch(row_wireno):
+                        continue
+
+                    name = clean(row.get("Name", ""))
+                    name_1 = clean(row.get("Name.1", ""))
+
+                    if relay_supply_endpoint in (name, name_1):
+                        df.at[index, "Line-Name"] = main_line_name
+                        df.at[index, "DaisyNo"] = "0"
+                        main_path_symbols.add(relay_supply_endpoint)
+
+        add_generated_row(
+            main_source,
+            f"{terminal}_MAIN",
+            wireno,
+            0,
+            main_line_name,
+            default_function[wireno],
+        )
+
+    main_path_symbols.discard("")
+
+    # MAIN naudota sena eilutė pašalinama.
+    for index, row in df.iterrows():
+        row_wireno = clean(row.get("Wireno", ""))
+
+        if (
+            row_wireno not in wirenos
+            and not page_wire_pattern.fullmatch(row_wireno)
+        ):
+            continue
+
+        name = clean(row.get("Name", ""))
+        name_1 = clean(row.get("Name.1", ""))
+
+        if (
+            name in main_source_symbols
+            or name_1 in main_source_symbols
+        ):
+            rows_to_remove.add(index)
+
+    def group_matches(symbols, functions, excluded_symbols):
+        matches = set()
+
+        for symbol in symbols:
+            if symbol in excluded_symbols:
+                continue
+
+            for function_symbol in functions:
+                function_symbol = clean(function_symbol)
+                if not function_symbol:
+                    continue
+
+                if re.match(
+                    rf"^{re.escape(function_symbol)}(?::|$)",
+                    symbol,
+                ):
+                    matches.add(symbol)
+                    break
+
+        return sorted(matches)
+
+    # Vartotojų daisy grandinės.
+    for wireno in wirenos:
+        section = df[df["Wireno"] == wireno]
+
+        if section.empty:
+            continue
+
+        terminal = resolve_terminal(wireno)
+        if not terminal:
+            continue
+
+        consumer_section = section[
+            ~section.index.isin(rows_to_remove)
+        ]
+
+        symbols = {
+            clean(symbol)
+            for symbol in pd.concat([
+                consumer_section["Name"],
+                consumer_section["Name.1"],
+            ])
+            if clean(symbol)
+        }
+
+        excluded_symbols = set(main_path_symbols)
+        excluded_symbols.update(main_source_symbols)
+        excluded_symbols.add(terminal)
+        excluded_symbols.add(f"{terminal}_MAIN")
+
+        # K devices with GND and ~/- each get their own 0VDC branch.
+        # Never place two wires on GND, and never join different K devices.
+        if wireno == "0VDC":
+            paired_contacts = defaultdict(lambda: defaultdict(set))
+            for symbol in symbols:
+                component, pin = split_endpoint(symbol)
+                designation = component.rsplit("/", 1)[-1]
+                if not re.fullmatch(r"-?K[^:]*", designation, re.IGNORECASE):
+                    continue
+                normalized_pin = re.sub(r"\s+", "", pin).upper()
+                normalized_pin = normalized_pin.translate(str.maketrans({"−": "-", "–": "-", "～": "~"}))
+                if normalized_pin in {"GND", "~/-"}:
+                    paired_contacts[component][normalized_pin].add(symbol)
+
+            for component, contacts in sorted(paired_contacts.items()):
+                if "GND" not in contacts or "~/-" not in contacts:
+                    continue
+                if len(contacts["GND"]) != 1 or len(contacts["~/-"]) != 1:
+                    raise ValueError(f"{component}: keli GND arba ~/- kontaktu variantai 0VDC grandineje")
+                gnd = next(iter(contacts["GND"]))
+                supply = next(iter(contacts["~/-"]))
+                if {gnd, supply} & excluded_symbols:
+                    raise ValueError(f"{component}: GND/~/- kontaktas parinktas MAIN kelyje; reikia patikrinti 0VDC istaka")
+                for index, row in section.iterrows():
+                    if {clean(row.get("Name", "")), clean(row.get("Name.1", ""))} & {gnd, supply}:
+                        rows_to_remove.add(index)
+                daisy_group = f"K0VDC_{component}"
+                add_generated_row(terminal, supply, wireno, daisy_group,
+                                  daisy_line_name, default_function[wireno])
+                add_generated_row(supply, gnd, wireno, daisy_group,
+                                  daisy_line_name, default_function[wireno])
+                excluded_symbols.update({gnd, supply})
+
+        for group, functions in group_symbols.items():
+            matches = group_matches(
+                symbols,
+                functions,
+                excluded_symbols,
+            )
+
+            if not matches:
+                continue
+
+            matched_symbols = set(matches)
+
+            for index, row in consumer_section.iterrows():
+                name = clean(row.get("Name", ""))
+                name_1 = clean(row.get("Name.1", ""))
+
+                if (
+                    name in matched_symbols
+                    or name_1 in matched_symbols
+                ):
+                    rows_to_remove.add(index)
+
+            first_symbol = matches[0]
+            first_meta = get_row_meta(wireno, first_symbol)
+
+            add_generated_row(
+                first_symbol,
+                terminal,
+                wireno,
+                group,
+                daisy_line_name,
+                first_meta.get("Line-Function", "")
+                or default_function[wireno],
+            )
+
+            for name, name_1 in zip(matches, matches[1:]):
+                row_meta = get_row_meta(wireno, name)
+
+                add_generated_row(
+                    name,
+                    name_1,
+                    wireno,
+                    group,
+                    daisy_line_name,
+                    row_meta.get("Line-Function", "")
+                    or default_function[wireno],
+                )
+
+    df = df.drop(
+        index=list(rows_to_remove),
+        errors="ignore",
+    )
+
+    if generated_rows:
+        generated_df = pd.DataFrame(
+            generated_rows,
+            columns=base_columns,
+        )
+        df = pd.concat(
+            [df, generated_df],
+            ignore_index=True,
+        )
+
+    # Galutinis dublių sutvarkymas.
+    df = df[
+        df["Name"].astype(str)
+        != df["Name.1"].astype(str)
+    ].copy()
+
+    df["DaisyNo"] = df["DaisyNo"].astype(str)
+
+    df["_distribution_priority"] = (
+        df["DaisyNo"].eq("0").astype(int)
+    )
+    df["_distribution_pair"] = df.apply(
+        lambda row: normalized_pair(
+            row.get("Name", ""),
+            row.get("Name.1", ""),
+        ),
+        axis=1,
+    )
+
+    df = df.sort_values(
+        "_distribution_priority",
+        ascending=False,
+    )
+
+    df = df.drop_duplicates(
+        subset=["_distribution_pair"],
+        keep="first",
+    )
+
+    df = df.drop(
+        columns=[
+            "_distribution_priority",
+            "_distribution_pair",
+        ],
+    )
+
+    return df.reset_index(drop=True)
     
-        st.download_button(
-            "📥 Download Processed CSV",
-            buf.getvalue(),
-            file_name=download_name2,
-            mime="text/csv"
+# ==========================================================
+# PIPELINE 11 – 24 VDC PASKIRSTYMAS
+# ==========================================================
+def stage1_pipeline_11(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
+    """
+    24 VDC / 0 VDC paskirstymas per bendrą P10 branduolį.
+    """
+
+    dc_config = {
+        # Tvarka būtina: 24VDC turi būti apdorojamas prieš 0VDC.
+        "wirenos": (
+            "24VDC",
+            "0VDC",
+            "24VDC1",
+            "24VDC2",
+            "24VDC3",
+        ),
+
+        "terminal_map": {
+            "24VDC": "-X0102:24VDC",
+            "0VDC": "-X0102:0VDC",
+            "24VDC1": "-X0102:24VDC1",
+            "24VDC2": "-X0102:24VDC2",
+            "24VDC3": "-X0102:24VDC3",
+        },
+
+        "default_function": {
+            "24VDC": "DBU",
+            "0VDC": "DBU/WH",
+            "24VDC1": "DBU",
+            "24VDC2": "DBU",
+            "24VDC3": "DBU",
+        },
+
+        "main_line_name": "1,5",
+        "daisy_line_name": "0,75",
+
+        "source_modes": {
+            "24VDC": "dc_primary",
+            "0VDC": "shortest",
+            "24VDC1": "direct",
+            "24VDC2": "direct",
+            "24VDC3": "direct",
+        },
+
+        # 0VDC MAIN ieškomas tame pačiame komponente kaip 24VDC MAIN.
+        "paired_main": {
+            "0VDC": "24VDC",
+        },
+
+        "direct_terminal_main": {
+            "24VDC1",
+            "24VDC2",
+            "24VDC3",
+        },
+
+        "relay_supply_groups": {
+            "24VDC1",
+            "24VDC2",
+            "24VDC3",
+        },
+
+        "downstream_wirenos": {
+            "24VDC1",
+            "24VDC2",
+            "24VDC3",
+        },
+    }
+
+    return stage1_pipeline_10(
+        df=df,
+        group_symbols=group_symbols,
+        config=dc_config,
+    )
+
+
+# ==========================================================
+# PIPELINE 12 – 230 VAC PASKIRSTYMAS
+# ==========================================================
+def stage1_pipeline_12(df: pd.DataFrame, group_symbols: dict) -> pd.DataFrame:
+    """
+    X0100 ir X0101 230 VAC paskirstymas per bendrą P10 branduolį.
+
+    X0100:
+      F903/L3
+      F903/N
+
+    X0101:
+      230VL
+      230VN
+
+    Po bendro P10 apdorojimo papildomai sutvarko 230 VAC MAIN
+    komponentų 90:xx / 91:xx maitinimo laidus į 1,5 mm².
+    """
+
+    ac_config = {
+        "wirenos": (
+            "F903/L3",
+            "F903/N",
+            "230VL",
+            "230VN",
+        ),
+
+        "terminal_map": {
+            "F903/L3": "-X0100",
+            "F903/N": "-X0100",
+            "230VL": "-X0101",
+            "230VN": "-X0101",
+        },
+
+        "default_function": {
+            "F903/L3": "BK",
+            "F903/N": "BU",
+            "230VL": "RD",
+            "230VN": "RD/WH",
+        },
+
+        "main_line_name": "1,5",
+        "daisy_line_name": "1,5",
+
+        "source_modes": {
+            "F903/L3": "wireno_origin",
+            "F903/N": "wireno_origin",
+            "230VL": "wireno_origin",
+            "230VN": "wireno_origin",
+        },
+
+        "paired_main": {},
+        "direct_terminal_main": set(),
+        "relay_supply_groups": set(),
+        "downstream_wirenos": set(),
+    }
+
+    result = stage1_pipeline_10(
+        df=df,
+        group_symbols=group_symbols,
+        config=ac_config,
+    )
+
+    def clean(value):
+        value = str(value).strip()
+        return "" if value.lower() in {"nan", "none", "null"} else value
+
+    def component_name(endpoint):
+        endpoint = clean(endpoint)
+        if ":" not in endpoint:
+            return endpoint
+        return endpoint.rsplit(":", 1)[0]
+
+    main_terminals = {
+        "-X0100:L3_MAIN",
+        "-X0100:N_MAIN",
+        "-X0101:230VL_MAIN",
+        "-X0101:230VN_MAIN",
+    }
+
+    main_components = set()
+
+    for _, row in result.iterrows():
+        name = clean(row.get("Name", ""))
+        name_1 = clean(row.get("Name.1", ""))
+
+        if name_1 in main_terminals and name:
+            main_components.add(component_name(name))
+
+        if name in main_terminals and name_1:
+            main_components.add(component_name(name_1))
+
+    if main_components:
+        page_wire_mask = result["Wireno"].astype(str).str.fullmatch(
+            r"(?:90|91):\d+",
+            case=False,
+            na=False,
         )
 
+        for index, row in result.loc[page_wire_mask].iterrows():
+            name = clean(row.get("Name", ""))
+            name_1 = clean(row.get("Name.1", ""))
 
-# ── Footer ────────────────────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown("""
-<div class="app-footer" style="text-align:center; padding:1rem 0;">
-  🌱 Sustainable Data Solutions • ⚡ The Future is Electric
-</div>
-""", unsafe_allow_html=True)
+            if (
+                component_name(name) in main_components
+                or component_name(name_1) in main_components
+            ):
+                result.at[index, "Line-Name"] = "1,5"
+                result.at[index, "DaisyNo"] = "0"
+
+    return result.reset_index(drop=True)
+    
+
+def stage1_pipeline_13(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Enhanced pipeline 12 that Line-Name and Line-Function values using EXACT matching only
+    2. Searches both Name AND Name.1 columns for exact matches
+    3. Removes rows where Name and Name.1 are identical
+    4. Sorts by DaisyNo first, then by Line-Name second
+    """
+    df = df.copy()
+
+    # Step 1: Build exact match dictionaries from both Name and Name.1 columns
+    def build_exact_mappings(df):
+        line_name_map = {}
+        line_function_map = {}
+
+        # Collect all non-empty values for mapping from BOTH Name and Name.1 columns
+        for idx, row in df.iterrows():
+            for col in ['Name', 'Name.1']:
+                value = str(row[col]).strip()
+                if not value or value == 'nan' or value == '':
+                    continue
+
+                # Collect Line-Name mappings (first non-empty occurrence wins)
+                line_name = str(row.get('Line-Name', '')).strip()
+                if line_name and line_name != '' and line_name != 'nan':
+                    if value not in line_name_map:
+                        line_name_map[value] = line_name
+
+                # Collect Line-Function mappings (first non-empty occurrence wins)
+                line_function = str(row.get('Line-Function', '')).strip()
+                if line_function and line_function != '' and line_function != 'nan':
+                    if value not in line_function_map:
+                        line_function_map[value] = line_function
+
+        return line_name_map, line_function_map
+
+    line_name_map, line_function_map = build_exact_mappings(df)
+
+    # Step 2: Apply exact matching to fill empty values
+    for idx, row in df.iterrows():
+        # Check and fill Line-Name if empty
+        current_line_name = str(row.get('Line-Name', '')).strip()
+        if not current_line_name or current_line_name == '' or current_line_name == 'nan':
+            for col in ['Name', 'Name.1']:
+                value = str(row[col]).strip()
+                if value and value in line_name_map:  # EXACT match only
+                    df.at[idx, 'Line-Name'] = line_name_map[value]
+                    break
+
+        # Check and fill Line-Function if empty
+        current_line_function = str(row.get('Line-Function', '')).strip()
+        if not current_line_function or current_line_function == '' or current_line_function == 'nan':
+            for col in ['Name', 'Name.1']:
+                value = str(row[col]).strip()
+                if value and value in line_function_map:  # EXACT match only
+                    df.at[idx, 'Line-Function'] = line_function_map[value]
+                    break
+
+    # Step 3: Remove rows where Name and Name.1 are identical
+    if 'Name' in df.columns and 'Name.1' in df.columns:
+        df = df[df['Name'] != df['Name.1']]
+
+    # Step 4: Sort by DaisyNo first, then by Line-Name second
+    sort_columns = []
+    if 'Wireno' in df.columns:
+        sort_columns.append('Wireno')
+    if 'DaisyNo' in df.columns:
+        sort_columns.append('DaisyNo')
+    if 'Line-Name' in df.columns:
+        sort_columns.append('Line-Name')
+
+    if sort_columns:
+        df = df.sort_values(by=sort_columns, ascending=True).reset_index(drop=True)
+
+    if 'DaisyNo' in df.columns:
+        df['DaisyNo'] = df['DaisyNo'].astype(str)
+
+    return df
+
+
+def stage1_pipeline_14(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Prepare dataframe for manual editing by:
+    1. Replacing cells containing 'Error' with empty strings
+    2. Identifying blank cells and ensuring proper data types for the data editor
+    """
+    df = df.copy()
+
+    # Replace any cell containing 'Error' with empty string across entire DataFrame
+    # This handles partial matches (case-insensitive)
+    df = df.replace(to_replace=r'.*[Ee]rror.*', value='', regex=True)
+
+    # Ensure DaisyNo is string type to avoid Arrow serialization issues
+    if 'DaisyNo' in df.columns:
+        df['DaisyNo'] = df['DaisyNo'].astype(str)
+
+    # Replace various representations of empty values with empty strings for consistency
+    df = df.fillna("")
+    df = df.replace(['nan', 'None', 'null', 'NULL'], "")
+
+    # Convert all columns to string for consistent editing
+    for col in df.columns:
+        df[col] = df[col].astype(str).replace('nan', "")
+
+    return df
+
+
+def identify_blank_cells(df: pd.DataFrame) -> dict:
+    """
+    Identify all blank/empty cells in the dataframe and return their locations
+    """
+    blank_cells = {}
+
+    def is_blank(value):
+        if pd.isna(value):
+            return True
+        str_val = str(value).strip()
+        return str_val == "" or str_val.lower() in ['nan', 'none', 'null']
+
+    for col in df.columns:
+        blank_rows = []  # Initialize blank_rows for each column
+        for idx, value in enumerate(df[col]):
+            if is_blank(value):
+                blank_rows.append(idx)
+
+        if blank_rows:  # Only add to dict if there are blank rows
+            blank_cells[col] = blank_rows
+
+    return blank_cells
+
+
+def stage1_pipeline_15(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stage 1 Pipeline 14 - Remove rows with specific pattern and POWER in DaisyNo
+
+    Removes rows where:
+    1. Name or Name.1 matches pattern -F***2:1 (exactly 8 symbols total)
+    2. DaisyNo column contains 'POWER' (case-insensitive)
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame
+
+    Returns:
+    --------
+    pd.DataFrame
+        Filtered DataFrame with matching rows removed
+    """
+
+    df = df.copy()
+
+    # Pattern for -F***2:1 where *** can be any 3 characters and total length is 8
+    pattern = re.compile(r'^-F.{3}2:1$')
+
+    # Check if DaisyNo column exists
+    if 'DaisyNo' not in df.columns:
+        return df
+
+    # Create masks for the conditions
+    mask_name = df['Name'].astype(str).str.match(pattern, na=False) if 'Name' in df.columns else pd.Series(False,
+                                                                                                           index=df.index)
+    mask_name1 = df['Name.1'].astype(str).str.match(pattern, na=False) if 'Name.1' in df.columns else pd.Series(False,
+                                                                                                                index=df.index)
+
+    # Check for POWER in DaisyNo (case-insensitive)
+    mask_power = df['DaisyNo'].astype(str).str.contains('POWER', case=False, na=False)
+
+    # Combine conditions: remove rows where (Name OR Name.1 matches pattern) AND DaisyNo contains POWER
+    mask_to_remove = (mask_name | mask_name1) & mask_power
+
+    # Keep rows that don't match the removal criteria
+    df_filtered = df[~mask_to_remove].reset_index(drop=True)
+
+    return df_filtered
+
+
+def stage1_pipeline_16(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stage 1 Pipeline 16 – Enhanced with -X102 protection
+    """
+    df = df.copy()
+    
+    # 0) Force-keep any -X102:* rows
+    force_keep = df[
+        df['Name'].str.startswith('-X102:', na=False) |
+        df['Name.1'].str.startswith('-X102:', na=False)
+    ]
+    
+    # 1) Work on remaining rows
+    working = df.drop(force_keep.index)
+
+    # 1. Drop -Fxxx:x rows except selected cases
+    pattern_f = re.compile(r'^-F(?!9\d{2}:\d$)(?!\d{2}8:2$)(?!8\d{2}:\d$)\d{3}:\d$')
+
+    name_is_f = working['Name'].astype(str).str.match(pattern_f, na=False)
+    name1_is_f = working['Name.1'].astype(str).str.match(pattern_f, na=False)
+
+    # Keep F-X and F-S connections
+    name_is_xs = working['Name'].astype(str).str.match(r'^-[XS]', na=False)
+    name1_is_xs = working['Name.1'].astype(str).str.match(r'^-[XS]', na=False)
+
+    keep_fx_fs = (
+        (name_is_f & name1_is_xs) |
+        (name1_is_f & name_is_xs)
+    )
+
+    mask_10_wires = working['Wireno'].astype(str).str.strip().str.startswith('10:')
+    mask_drop = (name_is_f | name1_is_f) & ~keep_fx_fs & ~mask_10_wires
+    working = working.loc[~mask_drop].reset_index(drop=True)
+
+    # 4) Re-attach the -X102:* rows
+    result = pd.concat([working, force_keep], ignore_index=True)
+    
+    return result.reset_index(drop=True)
+
+
+def stage1_pipeline_17(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stage 1 Pipeline 17 – Ensure Line-Name is '1,5' for given symbols in Name or Name.1.
+
+    For any row where Name or Name.1 appears in new_symbols,
+    set 'Line-Name' to '1,5'.
+    """
+    df = df.copy()
+    new_symbols = {
+        '-F903:2',   '-F903:N2',  '-F903.1:2', '-F903.1:N2', '-F904:2',  '-F904.1:N2',
+        '-T901',     '-C903:10',  '-C903:11',  '-F903.2:2',  '-F903.2:1', '-F901.1:1',
+        '-F901:2',   '-F901:N2',  '-F903:1',   '-F903.1:1',  '-F904:1',  '-F904.1:1',
+        '-K918:11',  '-K918:14',  '-F902:2',   '-F902:N2',   '-G90A3:OUT+', '-G90A3:OUT-'
+    }
+    mask = df['Name'].isin(new_symbols) | df['Name.1'].isin(new_symbols)
+    df.loc[mask, 'Line-Name'] = '1,5'
+    return df
+
+def stage1_pipeline_18(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stage 1 Pipeline 18 - Remove swapped duplicate rows
+    
+    Removes duplicate rows where Name and Name.1 are swapped but
+    Wireno, Line-Function, and Line-Name are identical.
+    
+    Example:
+    Row 1: Name="-F901:1", Name.1="-F901:2", Wireno="230VL", Line-Function="RD"
+    Row 2: Name="-F901:2", Name.1="-F901:1", Wireno="230VL", Line-Function="RD"
+    → Keep Row 1, remove Row 2
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with swapped duplicates removed
+    """
+    df = df.copy()
+    
+    if len(df) == 0:
+        return df
+    
+    # Check if required columns exist
+    required_cols = ['Name', 'Name.1']
+    if not all(col in df.columns for col in required_cols):
+        print("⚠️ Pipeline 18: Required columns (Name, Name.1) not found")
+        return df
+    
+    print(f"🔄 Pipeline 18: Processing {len(df)} rows for swapped duplicates")
+    
+    # Create normalized identifier for each row
+    def create_normalized_key(row):
+        name = str(row.get('Name', '')).strip()
+        name1 = str(row.get('Name.1', '')).strip()
+        
+        # Skip rows where both names are empty or identical
+        if not name or not name1 or name == name1:
+            # Use original values to avoid false matches
+            return (name, name1, 
+                   str(row.get('Wireno', '')).strip(),
+                   str(row.get('Line-Function', '')).strip(), 
+                   str(row.get('Line-Name', '')).strip())
+        
+        # Sort names alphabetically to normalize swapped pairs
+        sorted_names = tuple(sorted([name, name1]))
+        
+        # Include other fields that must match for true duplicates
+        wireno = str(row.get('Wireno', '')).strip()
+        line_function = str(row.get('Line-Function', '')).strip()
+        line_name = str(row.get('Line-Name', '')).strip()
+        
+        return (sorted_names, wireno, line_function, line_name)
+    
+    # Apply normalization and track original indices
+    df_with_keys = df.copy()
+    df_with_keys['_temp_key'] = df.apply(create_normalized_key, axis=1)
+    df_with_keys['_original_index'] = df.index
+    
+    # Find duplicates before removal
+    duplicate_keys = df_with_keys['_temp_key'].duplicated(keep=False)
+    duplicates = df_with_keys[duplicate_keys]
+    
+    if len(duplicates) > 0:
+        print(f"🔍 Pipeline 18: Found {len(duplicates)} rows with potential swapped duplicates")
+        
+        # Group by normalized key to show what's being removed
+        for key, group in duplicates.groupby('_temp_key'):
+            if len(group) > 1:
+                print(f"   📋 Duplicate group (keeping first):")
+                for idx, row in group.iterrows():
+                    status = "KEEP" if idx == group.index[0] else "REMOVE"
+                    print(f"      {status}: {row['Name']} ↔ {row['Name.1']} | {row.get('Wireno', '')} | {row.get('Line-Function', '')}")
+    
+    # Keep first occurrence of each normalized key
+    df_dedup = df_with_keys.drop_duplicates(subset=['_temp_key'], keep='first')
+    
+    # Remove temporary columns
+    df_dedup = df_dedup.drop(['_temp_key', '_original_index'], axis=1)
+    
+    # Report results
+    removed_count = len(df) - len(df_dedup)
+    if removed_count > 0:
+        print(f"✅ Pipeline 18: Removed {removed_count} swapped duplicate rows")
+        print(f"📊 Pipeline 18: {len(df)} → {len(df_dedup)} rows")
+    else:
+        print("✅ Pipeline 18: No swapped duplicates found")
+    
+    return df_dedup.reset_index(drop=True)
+
+
+def stage1_pipeline_20(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stage 1 Pipeline 20 - Clean identical Name/Name.1 rows and ensure terminal rows exist
+
+    Logic:
+    1. Delete rows where Name == Name.1 (identical columns)
+    2. Check for -X923:, -X924:, -X927:, -X928: values in Name or Name.1 (skip those ending in 230VL2)
+    3. Check if Wireno contains 230VN2 or 230VL2
+    4. Create missing terminal rows:
+       - If has 230VN2/VL2: create -X0100:230VN2 rows
+       - If no 230VN2/VL2: create -X0100:N rows
+    5. Remove duplicate rows where Name and Name.1 combinations are identical
+    6. Remove explicit unwanted (Name,Name.1) pairs
+    7. Final cleanup and sorting
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame
+
+    Returns:
+    --------
+    pd.DataFrame
+        Cleaned DataFrame with ensured terminal rows
+    """
+
+    df = df.copy()
+
+    # Step 1: Remove rows where Name == Name.1
+    if 'Name' in df.columns and 'Name.1' in df.columns:
+        df = df[df['Name'] != df['Name.1']].reset_index(drop=True)
+
+    # Step 2: Detect 230VN2/VL2 in Wireno
+    has_230vn2_or_230vl2 = ('Wireno' in df.columns and
+        df['Wireno'].str.contains('230VN2|230VL2', na=False).any()
+    )
+    print(f"🔍 Pipeline 20: 230VN2/230VL2 detected: {has_230vn2_or_230vl2}")
+
+    # Step 3: Find target prefixes (skip those containing 230VL2)
+    prefixes = ['-X923:', '-X924:', '-X927:', '-X928:']
+    found = set()
+    # Only include symbols ending with ':N' or ':230VN2'
+    for p in prefixes:
+        mask1 = (df['Name'].str.startswith(p, na=False)
+                 & (df['Name'].str.endswith(':N', na=False)
+                    | df['Name'].str.endswith(':230VN2', na=False)))
+        mask2 = (df['Name.1'].str.startswith(p, na=False)
+                 & (df['Name.1'].str.endswith(':N', na=False)
+                    | df['Name.1'].str.endswith(':230VN2', na=False)))
+        found.update(df.loc[mask1, 'Name'])
+        found.update(df.loc[mask2, 'Name.1'])
+    found = [v for v in found if isinstance(v, str) and v]
+    if not found:
+        # Deduplicate and return early
+        if {'Name','Name.1'}.issubset(df.columns):
+            df = df.drop_duplicates(['Name','Name.1'], keep='first').reset_index(drop=True)
+        return df
+
+    print(f"🔍 Pipeline 20: Valid X-values: {sorted(found)}")
+
+    # Step 4: Create missing terminal rows
+    suffix = '230VN2' if has_230vn2_or_230vl2 else 'N'
+    terminal = f'-X0100:{suffix}'
+    print(f"🔧 Pipeline 20: Using terminal {terminal}")
+
+    base_cols = list(df.columns)
+    for c in ['Name','Name.1','Wireno','Line-Name','Line-Function','DaisyNo']:
+        if c not in base_cols: base_cols.append(c)
+
+    existing = set()
+    for _,r in df.iterrows():
+        n,n1 = str(r['Name']).strip(), str(r['Name.1']).strip()
+        if n==terminal and n1 in found: existing.add(n1)
+        if n1==terminal and n in found: existing.add(n)
+
+    missing = [x for x in found if x not in existing]
+    if missing:
+        print(f"🔧 Creating {len(missing)} missing terminal rows")
+        new_rows = []
+        for x in missing:
+            sample = df[(df['Name']==x)|(df['Name.1']==x)].iloc[0]
+            row = {c:"" for c in base_cols}
+            row.update({
+                'Name': x,
+                'Name.1': terminal,
+                'Wireno': suffix if has_230vn2_or_230vl2 else 'F903/N',
+                'Line-Name': '1,5',
+                'Line-Function': 'BU',
+                'DaisyNo': sample.get('DaisyNo','0')
+            })
+            new_rows.append(row)
+            print(f"  ✅ {x} → {terminal}")
+        df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+    else:
+        print("✅ Pipeline 20: All terminal rows already exist")
+
+    # Step 5: Remove duplicate Name/Name.1 rows
+    if {'Name','Name.1'}.issubset(df.columns):
+        before = len(df)
+        df = df.drop_duplicates(subset=['Name','Name.1'], keep='first').reset_index(drop=True)
+        print(f"✂️ Removed {before-len(df)} duplicate Name/Name.1 rows")
+
+    # Step 6: Remove explicit unwanted pairs
+    delete_pairs = {
+        ("-X923:N","-X923:N"),("-X924:N","-X924:N"),
+        ("-X923:N","-X924:N"),("-X924:N","-X923:N"),
+        ("-X924:N","-X927:N"),("-X923:N","-X927:N"),
+        ("-X927:N","-X927:N"),("-X928:N","-X927:N"),
+        ("-X928:N","-X928:N"),("-X923:N","-X928:N"),
+        ("-X924:N","-X928:N"),("-X927:N","-X928:N"),
+        ("-X923:230VN2","-X923:230VN2"),("-X924:230VN2","-X924:230VN2"),
+        ("-X923:230VN2","-X924:230VN2"),("-X924:230VN2","-X923:230VN2"),
+        ("-X924:230VN2","-X927:230VN2"),("-X923:230VN2","-X927:230VN2"),
+        ("-X927:230VN2","-X927:230VN2"),("-X928:230VN2","-X927:230VN2"),
+        ("-X928:230VN2","-X928:230VN2"),("-X923:230VN2","-X928:230VN2"),
+        ("-X924:230VN2","-X928:230VN2"),("-X927:230VN2","-X928:230VN2")
+    }
+    for idx in reversed(df.index):
+        pair = (df.at[idx,"Name"], df.at[idx,"Name.1"])
+        if pair in delete_pairs:
+            df.drop(idx, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    # Final cleanup & sorting
+    sort_cols = [c for c in ['Wireno','DaisyNo','Line-Name'] if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(by=sort_cols, ascending=True).reset_index(drop=True)
+    if 'DaisyNo' in df.columns:
+        df['DaisyNo'] = df['DaisyNo'].astype(str)
+
+    print(f"📊 Pipeline 20 final rows: {len(df)}")
+    return df
+
+def stage1_pipeline_21(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pipeline 21:
+    For Wirenos in {"0VDC","24VDC","24VDC1","24VDC2","230VL","230VN"}:
+      – If DaisyNo != "0", set Line-Name to "0,75"
+      – If DaisyNo == "0", leave Line-Name unchanged
+    Additionally:
+      – If Name or Name.1 equals "-F901.1:1" or "-T901:115 V", set Line-Name to "1,5"
+      – If Name=='-F104:4' & Name.1=='-X0100:230VL2' or Name=='-F104:6' & Name.1=='-X0100:230VN2',
+        set Line-Name to "2,5"
+    Finally:
+      – If any 230VL2 or 230VN2 appears in Wireno, append four -X102 rows.
+    """
+    WIRENOS = {"0VDC", "24VDC", "24VDC1", "24VDC2", "230VL", "230VN"}
+    SPECIAL_TERMS = {"-F901.1:1", "-T901:115 V"}
+
+    df = df.copy()
+
+    # Ensure required columns exist
+    if "Wireno" not in df.columns or "Line-Name" not in df.columns:
+        return df.reset_index(drop=True)
+    if "DaisyNo" not in df.columns:
+        df["DaisyNo"] = ""
+
+    # Base transformation for WIRENOS
+    mask_power = df["Wireno"].isin(WIRENOS) & (df["DaisyNo"] != "0")
+    df.loc[mask_power, "Line-Name"] = "0,75"
+
+    # Special override for specific terms
+    mask_special = (
+        df["Name"].isin(SPECIAL_TERMS) |
+        df["Name.1"].isin(SPECIAL_TERMS)
+    )
+    df.loc[mask_special, "Line-Name"] = "1,5"
+
+    # Force Line-Name="2,5" for the two specified pairs
+    mask_pair1 = (df["Name"] == "-F104:4") & (df["Name.1"] == "-X0100:230VL2")
+    mask_pair2 = (df["Name"] == "-F104:6") & (df["Name.1"] == "-X0100:230VN2")
+    df.loc[mask_pair1 | mask_pair2, "Line-Name"] = "2,5"
+
+    # Detect 230VL2 or 230VN2 for appending extra rows
+    has_v2 = df["Wireno"].str.contains("230VL2|230VN2", na=False).any()
+    if has_v2:
+        extra = [
+            {"Name": "-X102:1", "Name.1": "-F102:4",  "Wireno": "10:01", "Line-Name": "2,5", "Line-Function": "BK"},
+            {"Name": "-X102:2", "Name.1": "-F102:6",  "Wireno": "10:02", "Line-Name": "2,5", "Line-Function": "BK"},
+            {"Name": "-X102:3", "Name.1": "-F104:1",  "Wireno": "10:04", "Line-Name": "2,5", "Line-Function": "BK"},
+            {"Name": "-X102:4", "Name.1": "-F104:5",  "Wireno": "10:05", "Line-Name": "2,5", "Line-Function": "BU"},
+        ]
+        # Ensure each extra row includes all existing columns
+        for row in extra:
+            for col in df.columns:
+                row.setdefault(col, "")
+        df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
+
+    return df.reset_index(drop=True)
+
+
+def stage1_pipeline_22(df: pd.DataFrame) -> pd.DataFrame:
+    # Ventiliatoriu laidai atkuriami is originalo po viso Stage 1.
+    return df.copy().reset_index(drop=True)
+
+
+def stage1_pipeline_24(df):
+    """
+    Stage 1 Pipeline 24 - Remove duplicate 0VDC and 230VN rows for DOOR DaisyNo
+    
+    Logic:
+    1. Check for DaisyNo containing 'DOOR' or 'door' (case insensitive)
+    2. For rows with DOOR DaisyNo, remove all 0VDC rows except the first occurrence
+    3. Keep only the unique DOOR 230VN connection to -X0101:230VN.
+       If the connection is missing or ambiguous, keep all DOOR 230VN rows.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame (expected from Stage 1 processing)
+        
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with duplicate DOOR 0VDC and 230VN rows removed
+    """
+    import pandas as pd
+    
+    df = df.copy()
+    
+    print(f"🔧 Pipeline 24: Processing {len(df)} rows for DOOR duplicates")
+    
+    # Check if required columns exist
+    if 'DaisyNo' not in df.columns or 'Wireno' not in df.columns:
+        print("⚠️ Pipeline 24: Required columns (DaisyNo, Wireno) not found")
+        return df
+    
+    # Step 1: Identify rows with DOOR DaisyNo (case insensitive)
+    door_mask = df['DaisyNo'].astype(str).str.contains('door', case=False, na=False)
+    door_rows = df[door_mask]
+    non_door_rows = df[~door_mask]
+    
+    if door_rows.empty:
+        print("✅ Pipeline 24: No DOOR rows found, no changes needed")
+        return df
+    
+    print(f"🔍 Pipeline 24: Found {len(door_rows)} DOOR rows")
+    
+    neutral_rows = door_rows[door_rows['Wireno'].astype(str).str.strip().eq('230VN')]
+    terminal = '-X0101:230VN'
+    terminal_matches = (
+        neutral_rows.reindex(columns=['Name', 'Name.1'])
+        .apply(lambda column: column.astype(str).str.strip().eq(terminal))
+        .any(axis=1)
+    )
+    keep_terminal_only = int(terminal_matches.sum()) == 1
+    if not neutral_rows.empty and not keep_terminal_only:
+        print(
+            f"Pipeline 24: Found {terminal_matches.sum()} DOOR 230VN connections "
+            f"to {terminal}; keeping all {len(neutral_rows)} DOOR 230VN rows"
+        )
+
+    # Step 2: Apply the DOOR rules
+    processed_door_rows = []
+    seen_0vdc = False
+    removed_count = 0
+    
+    for idx, row in door_rows.iterrows():
+        wireno = str(row['Wireno']).strip()
+        
+        # Check for 0VDC
+        if wireno == '0VDC':
+            if not seen_0vdc:
+                seen_0vdc = True
+                processed_door_rows.append(row)
+                print(f"✅ Pipeline 24: Keeping first 0VDC DOOR row (index {idx})")
+            else:
+                removed_count += 1
+                print(f"🗑️ Pipeline 24: Removing duplicate 0VDC DOOR row (index {idx})")
+                continue
+        
+        # Keep the unique connection to the distribution terminal.
+        elif wireno == '230VN':
+            endpoints = (str(row.get('Name')).strip(), str(row.get('Name.1')).strip())
+            if keep_terminal_only and terminal not in endpoints:
+                removed_count += 1
+                continue
+            processed_door_rows.append(row)
+
+        # Keep all other DOOR rows
+        else:
+            processed_door_rows.append(row)
+    
+    # Step 3: Combine processed DOOR rows with non-DOOR rows
+    if processed_door_rows:
+        processed_door_df = pd.DataFrame(processed_door_rows)
+        result_df = pd.concat([non_door_rows, processed_door_df], ignore_index=True)
+    else:
+        result_df = non_door_rows.copy()
+    
+    # Report results
+    if removed_count > 0:
+        print(f"✂️ Pipeline 24: Removed {removed_count} duplicate DOOR rows")
+        print(f"📊 Pipeline 24: {len(df)} → {len(result_df)} rows")
+    else:
+        print("✅ Pipeline 24: No duplicate DOOR rows to remove")
+    
+    return result_df.reset_index(drop=True)
+
+def stage1_pipeline_25(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
+    """
+    PE grandines paima iš originalaus EPLAN failo.
+
+    Atranka:
+    - Imamos tik realios jungtys į -XPE.
+    - Kontaktai su simboliu ⏚ atmetami, išskyrus -T9...
+    - Iš -M... paliekami tik -M92...
+    - Iš -T... paliekami:
+        -T81...  -> 2,5 mm²
+        -T9...   -> 1,5 mm²
+        -T...011 -> 1,5 mm²
+      Kiti -T... atmetami.
+    - Iš -X... paliekami tik -X92...
+    - Kiti komponentai paliekami.
+
+    Papildoma T81 logika:
+    - Originaliame faile surandami visi realiai esantys T81 variantai.
+    - Kiekvienam sugeneruojama PE jungtis per S2.
+
+    Storiai:
+    - Jei originale Line-Name nurodytas, jis paliekamas.
+    - 1,0 / 1.0 pakeičiama į 0,75.
+    - Jei storis nenurodytas:
+        -T81... -> 2,5
+        -T...   -> 1,5
+        -K...   -> 0,75
+        visa kita -> 1,5
+    """
+
+    df = df.copy().fillna("")
+    source = df_original.copy().fillna("")
+
+    # PE jungčių sąrašas imamas iš originalaus failo,
+    # tačiau skerspjūviai tikrinami ir dabartiniame apdorotame df.
+    size_source = pd.concat(
+        [
+            df.copy().fillna(""),
+            stage1_pipeline_3(df_original.copy().fillna("")),
+        ],
+        ignore_index=True,
+    )
+
+    required_columns = {"Name", "Name.1"}
+
+    if not required_columns.issubset(df.columns):
+        return df.reset_index(drop=True)
+
+    if not required_columns.issubset(source.columns):
+        return df.reset_index(drop=True)
+
+    source = stage1_pipeline_3(source)
+
+    for column in ("Wireno", "Line-Name", "Line-Function", "DaisyNo"):
+        if column not in df.columns:
+            df[column] = ""
+
+    base_columns = list(df.columns)
+
+    def clean(value):
+        value = str(value).strip()
+        return "" if value.lower() in {"nan", "none", "null"} else value
+
+    def designation(endpoint):
+        endpoint = clean(endpoint)
+        return endpoint.rsplit("/", 1)[-1] if "/" in endpoint else endpoint
+
+    def normalize_endpoint(endpoint):
+        """
+        Normalizuoja tikslų pajungimo tašką palyginimui:
+        - pašalina vietos prefiksą;
+        - pakeičia į didžiąsias raides;
+        - pašalina visus tarpus.
+
+        Pvz. -T901:0 V* ir -T901:0V* laikomi tuo pačiu kontaktu.
+        """
+        endpoint = designation(endpoint).upper()
+        return re.sub(r"\s+", "", endpoint)
+
+    def component_name(endpoint):
+        endpoint = designation(endpoint)
+        return endpoint.rsplit(":", 1)[0] if ":" in endpoint else endpoint
+
+    def is_xpe(endpoint):
+        return component_name(endpoint).upper() == "-XPE"
+
+    def keep_component(endpoint):
+        endpoint = designation(endpoint).strip()
+        component = component_name(endpoint).upper()
+
+        if not component:
+            return False
+
+        # Kontaktai su ⏚ atmetami visiems, išskyrus T9...
+        if "⏚" in endpoint and not component.startswith("-T9"):
+            return False
+
+        if component.startswith("-M"):
+            return component.startswith("-M92")
+
+        if component.startswith("-T81"):
+            return True
+
+        if component.startswith("-T9"):
+            return True
+
+        if component.startswith("-T"):
+            return bool(re.fullmatch(r"-T\d*011(?:\.\d+)?", component))
+
+        if component.startswith("-X"):
+            return component.startswith("-X92")
+
+        return True
+
+    def normalize_line_name(value):
+        value = clean(value)
+        return "0,75" if value in {"1,0", "1.0"} else value
+
+    size_values = {
+        "0,5": 0.5,
+        "0,75": 0.75,
+        "1,5": 1.5,
+        "2,5": 2.5,
+        "4": 4.0,
+        "6": 6.0,
+        "10": 10.0,
+        "16": 16.0,
+        "25": 25.0,
+        "35": 35.0,
+        "50": 50.0,
+        "70": 70.0,
+        "95": 95.0,
+        "120": 120.0,
+    }
+
+    def largest_line_name(values):
+        normalized_values = []
+
+        for value in values:
+            normalized = normalize_line_name(value)
+
+            if normalized:
+                normalized_values.append(normalized)
+
+        if not normalized_values:
+            return ""
+
+        valid_values = [
+            value
+            for value in normalized_values
+            if value in size_values
+        ]
+
+        if valid_values:
+            return max(
+                valid_values,
+                key=lambda value: size_values[value],
+            )
+
+        return normalized_values[0]
+
+    def contact_max_line_name(endpoint):
+        """
+        Surenka visų originalaus failo laidų skerspjūvius,
+        kurie jungiasi prie to paties tikslaus kontakto.
+
+        Pvz.:
+        -T901:0V* -> 230VN_MAIN   1,5
+        -T901:0V* -> XPE          0,75
+
+        Rezultatas: 1,5.
+        """
+        exact_endpoint = normalize_endpoint(endpoint)
+        found_sizes = []
+
+        for _, row in size_source.iterrows():
+            name = normalize_endpoint(row.get("Name", ""))
+            name_1 = normalize_endpoint(row.get("Name.1", ""))
+
+            if exact_endpoint not in {name, name_1}:
+                continue
+
+            line_name = normalize_line_name(
+                row.get("Line-Name", "")
+            )
+
+            if line_name:
+                found_sizes.append(line_name)
+
+        return largest_line_name(found_sizes)
+
+    def default_line_name(endpoint):
+        component = component_name(endpoint).upper()
+
+        if component.startswith("-T81"):
+            return "2,5"
+
+        if component.startswith("-T"):
+            return "1,5"
+
+        if component.startswith("-K"):
+            return "0,75"
+
+        return "1,5"
+
+    processed_pe_mask = df.apply(
+        lambda row: (
+            is_xpe(row.get("Name", ""))
+            or is_xpe(row.get("Name.1", ""))
+            or clean(row.get("Wireno", "")).upper() == "PE"
+        ),
+        axis=1,
+    )
+
+    result = df.loc[~processed_pe_mask].copy()
+
+    generated_rows = []
+    seen_endpoints = set()
+
+    for _, source_row in source.iterrows():
+        name = clean(source_row.get("Name", ""))
+        name_1 = clean(source_row.get("Name.1", ""))
+
+        if is_xpe(name) and not is_xpe(name_1):
+            component_endpoint = designation(name_1)
+        elif is_xpe(name_1) and not is_xpe(name):
+            component_endpoint = designation(name)
+        else:
+            continue
+
+        if not keep_component(component_endpoint):
+            continue
+
+        size_endpoint = component_endpoint
+        # EPLAN import: normalize the protective-earth contact symbol.
+        if component_endpoint.endswith(":⏚"):
+            component_endpoint = component_endpoint.rsplit(":", 1)[0] + ":PE"
+
+        endpoint_key = component_endpoint.upper()
+
+        if endpoint_key in seen_endpoints:
+            continue
+
+        seen_endpoints.add(endpoint_key)
+
+        # Visada tikrinami visi originalaus failo laidai,
+        # prijungti prie to paties tikslaus kontakto.
+        line_name = contact_max_line_name(size_endpoint)
+
+        if not line_name:
+            line_name = default_line_name(component_endpoint)
+
+        daisy_no = "CONTROL" if line_name == "0,75" else "POWER"
+
+        new_row = {column: "" for column in base_columns}
+        new_row.update({
+            "Name": component_endpoint,
+            "Name.1": "-XPE:PE",
+            "Wireno": "PE",
+            "Line-Name": line_name,
+            "Line-Function": "GNYE",
+            "DaisyNo": daisy_no,
+        })
+
+        generated_rows.append(new_row)
+
+    # Surandami visi realiai projekte esantys T81 grupės komponentai.
+    t81_components = set()
+
+    for _, source_row in source.iterrows():
+        for column in ("Name", "Name.1"):
+            endpoint = designation(source_row.get(column, ""))
+            component = component_name(endpoint).upper()
+
+            if re.fullmatch(r"-T81(?:\.\d+)?", component):
+                t81_components.add(component)
+
+    # Kiekvienam T81 variantui sukuriama PE jungtis per S2.
+    for component in sorted(t81_components):
+        component_endpoint = f"{component}:S2"
+        endpoint_key = component_endpoint.upper()
+
+        if endpoint_key in seen_endpoints:
+            continue
+
+        seen_endpoints.add(endpoint_key)
+
+        new_row = {column: "" for column in base_columns}
+        new_row.update({
+            "Name": component_endpoint,
+            "Name.1": "-XPE:PE",
+            "Wireno": "PE",
+            "Line-Name": "2,5",
+            "Line-Function": "GNYE",
+            "DaisyNo": "POWER",
+        })
+
+        generated_rows.append(new_row)
+
+    if generated_rows:
+        result = pd.concat(
+            [
+                result,
+                pd.DataFrame(generated_rows, columns=base_columns),
+            ],
+            ignore_index=True,
+        )
+
+    return result.reset_index(drop=True)
+
+def stage1_pipeline_26(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stage 1 Pipeline 26 – sutvarko :01 grandines su :3 ir :6 kontaktais.
+
+    Tikslas:
+      Toje pačioje Wireno (baigiasi ':01') grupėje, jei yra ta pati bazė
+      su kontaktais :3 ir :6, ir abu jie eina į tą patį "other":
+
+        bazė:3  ↔ other
+        bazė:6  ↔ other
+
+      → perstatome į:
+
+        bazė:6  ↔ other
+        bazė:3  ↔ bazė:6
+
+    Tai duoda struktūrą kaip tavo nuotraukoje:
+      viena eilutė :3–:6, kita :6–likęs pajungimas.
+    """
+
+    df = df.copy()
+
+    # Reikalingi stulpeliai
+    required = {"Name", "Name.1", "Wireno"}
+    if not required.issubset(df.columns):
+        return df.reset_index(drop=True)
+
+    # Einam per visus Wireno, kurie baigiasi ':01'
+    wirenos_01 = sorted(
+        w for w in df["Wireno"].astype(str).unique()
+        if w.endswith(":01")
+    )
+
+    for w in wirenos_01:
+        mask_w = df["Wireno"].astype(str) == w
+        group_idx = df.index[mask_w]
+        if len(group_idx) == 0:
+            continue
+
+        # Susirenkam visus simbolius šitoje Wireno grupėje
+        symbols = set()
+        sub = df.loc[group_idx]
+        for col in ["Name", "Name.1"]:
+            symbols.update(sub[col].astype(str).tolist())
+
+        # base -> { '3': [(idx, side)], '6': [(idx, side)] }
+        base_to_pins = {}
+
+        for idx in group_idx:
+            for side in ["Name", "Name.1"]:
+                s = str(df.at[idx, side])
+                if ":" not in s:
+                    continue
+                base, pin = s.rsplit(":", 1)
+                if pin not in {"3", "6"}:
+                    continue
+                base_to_pins.setdefault(base, {"3": [], "6": []})
+                base_to_pins[base][pin].append((idx, side))
+
+        # Apdirbam bazes, kurios turi ir 3, ir 6
+        for base, pins in base_to_pins.items():
+            if not pins["3"] or not pins["6"]:
+                continue
+
+            full3 = f"{base}:3"
+            full6 = f"{base}:6"
+
+            # Jei jau yra eilutė bazė:3 ↔ bazė:6 – nieko nedarom
+            has_3_6 = False
+            for idx in group_idx:
+                left = str(df.at[idx, "Name"])
+                right = str(df.at[idx, "Name.1"])
+                if {left, right} == {full3, full6}:
+                    has_3_6 = True
+                    break
+            if has_3_6:
+                continue
+
+            # Paimam po vieną kandidatą :3 ir :6
+            idx3, side3 = pins["3"][0]
+            idx6, side6 = pins["6"][0]
+
+            # Koks yra "other" :6 eilutėje?
+            if side6 == "Name":
+                other = df.at[idx6, "Name.1"]
+            else:
+                other = df.at[idx6, "Name"]
+
+            # Koks "other" :3 eilutėje?
+            if side3 == "Name":
+                other3 = df.at[idx3, "Name.1"]
+            else:
+                other3 = df.at[idx3, "Name"]
+
+            # Tvarkom tik tada, kai abu ėjo į tą patį "other"
+            if str(other3) != str(other):
+                continue
+
+            # 1) idx6 eilutę padarom: bazė:6 ↔ other
+            df.at[idx6, "Name"] = full6
+            df.at[idx6, "Name.1"] = other
+
+            # 2) idx3 eilutę padarom: bazė:3 ↔ bazė:6
+            df.at[idx3, "Name"] = full3
+            df.at[idx3, "Name.1"] = full6
+
+    return df.reset_index(drop=True)
+
+def stage1_pipeline_27(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pipeline 27 – Q:13 / Q:A1 RD „stuburo“ formavimas.
+
+    Ieško RD (Line-Function = 'RD') eilučių grupėse pagal tą patį Wireno, kur:
+      – yra bent du laidai
+      – bent vienas kontaktas -Qxx:13
+      – bent vienas kontaktas -Qxx:A1 (tas pats Qxx)
+
+    Tada toje Wireno grupėje, kiekvienam tokiam -Qxx:
+      1) Formuoja stuburą Q:13 ↔ Q:A1
+      2) Q:A1 ↔ other  (kur other yra komponentas, bendras Q:13 ir Q:A1 kaimynas)
+      3) other ↔ other_tail (jei yra antras „other“ iš Q:13 pusės)
+
+    Jei grandinė jau tokios formos – nieko nekeičia (idempotentiška).
+    """
+
+    import re
+    from collections import defaultdict
+
+    df = df.copy()
+    needed = {"Name", "Name.1", "Wireno", "Line-Function"}
+    if not needed.issubset(df.columns):
+        return df.reset_index(drop=True)
+
+    # Normalizuojam RD žymėjimą
+    lf_norm = df["Line-Function"].astype(str).str.strip().str.upper()
+
+    # Regex, kad pagautume -Qxxxx:13 arba -Qxxxx:A1
+    q_pat = re.compile(r"^(-Q\d+)\s*:\s*(A1|13)$", re.IGNORECASE)
+
+    def s(val):
+        return "" if pd.isna(val) else str(val).strip()
+
+    for wir, grp in df.groupby(df["Wireno"].astype(str), sort=False):
+        grp_idx = list(grp.index)
+
+        # RD eilutės šitoje Wireno grupėje
+        rd_idx = [i for i in grp_idx if lf_norm.get(i, "") == "RD"]
+        if len(rd_idx) < 2:
+            continue
+
+        # Q bazės ir jų A1/13 laidai
+        # q_map[qbase]['A1'] / ['13'] -> list of (row_idx, this_symbol, other_symbol)
+        q_map = defaultdict(lambda: {"A1": [], "13": []})
+
+        for idx in rd_idx:
+            left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+
+            # kairė pusė
+            m = q_pat.match(left)
+            if m:
+                qbase = m.group(1).upper()
+                pin = m.group(2).upper()
+                q_map[qbase][pin].append((idx, left, right))
+
+            # dešinė pusė
+            m = q_pat.match(right)
+            if m:
+                qbase = m.group(1).upper()
+                pin = m.group(2).upper()
+                q_map[qbase][pin].append((idx, right, left))
+
+        # Apdirbam kiekvieną Q bazę, kuri turi ir A1, ir 13
+        for qbase, pins in q_map.items():
+            if not pins["A1"] or not pins["13"]:
+                continue
+
+            fullA1 = f"{qbase}:A1"
+            full13 = f"{qbase}:13"
+
+            # kaimynai iš 13 ir A1
+            neighbors_13 = {other for (_, _, other) in pins["13"]}
+            neighbors_A1 = {other for (_, _, other) in pins["A1"]}
+
+            # bendras kaimynas = „vidurinis other“
+            common_others = [o for o in neighbors_13 & neighbors_A1 if s(o)]
+            if not common_others:
+                # jeigu Q:13 ir Q:A1 neturi bendro kaimyno – šitos Q bazės neliest
+                continue
+
+            middle_other = s(common_others[0])
+
+            # „uodegos“ other – kitas kaimynas iš Q:13 pusės, jei toks yra
+            tail_candidates = [o for o in neighbors_13 if s(o) and s(o) != middle_other]
+            tail_other = s(tail_candidates[0]) if tail_candidates else None
+
+            # Pasirenkam eilutes, kurias perrašysim:
+            #  – idx_stub  : Q:13 ↔ Q:A1
+            #  – idx_middle: Q:A1 ↔ middle_other
+            #  – idx_tail  : middle_other ↔ tail_other (jei reikia)
+            idx_stub = pins["13"][0][0]
+            idx_middle = pins["A1"][0][0]
+
+            idx_tail = None
+            if tail_other is not None:
+                # ieškom Q:13–tail_other eilutės
+                for (idx, this_sym, other_sym) in pins["13"]:
+                    if s(other_sym) == tail_other and idx != idx_stub:
+                        idx_tail = idx
+                        break
+                # jei neradom tokios, pasinaudojam bet kuria kita RD eilute,
+                # kur dalyvauja middle_other / tail_other
+                if idx_tail is None:
+                    for idx in rd_idx:
+                        left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+                        pair = {left, right}
+                        if idx in (idx_stub, idx_middle):
+                            continue
+                        if middle_other in pair or (tail_other in pair):
+                            idx_tail = idx
+                            break
+
+            # 1) stuburas Q:13 ↔ Q:A1
+            df.at[idx_stub, "Name"] = full13
+            df.at[idx_stub, "Name.1"] = fullA1
+
+            # 2) Q:A1 ↔ middle_other
+            df.at[idx_middle, "Name"] = fullA1
+            df.at[idx_middle, "Name.1"] = middle_other
+
+            # 3) middle_other ↔ tail_other (jei turim uodegą)
+            if tail_other is not None and idx_tail is not None:
+                df.at[idx_tail, "Name"] = middle_other
+                df.at[idx_tail, "Name.1"] = tail_other
+
+            # Išvalom perteklines RD eilutes su šitu Q (paliekam tik stuburą/middle/tail)
+            keep_idx = {idx_stub, idx_middle}
+            if idx_tail is not None:
+                keep_idx.add(idx_tail)
+
+            drop_idx = []
+            for idx in rd_idx:
+                if idx in keep_idx:
+                    continue
+                left, right = s(df.at[idx, "Name"]), s(df.at[idx, "Name.1"])
+                if fullA1 in {left, right} or full13 in {left, right}:
+                    drop_idx.append(idx)
+
+            if drop_idx:
+                df = df.drop(index=drop_idx)
+
+    # galutinis indeksų sutvarkymas ir minimalus dedupe
+    if {"Name", "Name.1", "Wireno"}.issubset(df.columns):
+        df = df.drop_duplicates(subset=["Name", "Name.1", "Wireno"], keep="first")
+
+    return df.reset_index(drop=True)
+
+def stage1_pipeline_28(df: pd.DataFrame, component_to_group: dict) -> pd.DataFrame:
+    """
+    Pipeline 28 (UPDATED) – RD grandinės perstatymas (rewiring) pagal grupes.
+    Tikslas (viename Wireno, tik RD eilutėms, kai grafas yra paprastas kelias be šakų):
+      Perstatyti RD grandinės mazgus taip, kad kelias būtų:
+        DOOR → SWING → OTHER → POWER
+      Jei kurios nors grupės nėra – ji tiesiog praleidžiama.
+      Jei komponentui nerandam grupės antrame faile – laikom OTHER.
+    SVARBU:
+      - Keičiame TIK 'Name' ir 'Name.1' reikšmes (poras).
+      - Visi kiti stulpeliai (Wireno, Line-Function, Line-Name, DaisyNo, ir t.t.) lieka nepakeisti.
+      - Neliečiam grupių, kurios nėra paprastas kelias (šakos, keli atskiri gabalai, kilpos, neaišku).
+    Parametrai:
+      df: pagrindinis EPLAN importo DataFrame
+      component_to_group: dict, pvz. {"-S1315":"DOOR", "-K2114":"SWING", "-Q1317":"POWER", ...}
+    Pastaba:
+      component_to_group raktai turi būti komponento bazė (iki ':'),
+      o reikšmės: "DOOR","SWING","POWER", ... (case-insensitive).
+    """
+
+    import pandas as pd
+    from collections import defaultdict, deque
+
+    df = df.copy()
+    needed = {"Name", "Name.1", "Wireno", "Line-Function"}
+    if not needed.issubset(df.columns):
+        return df.reset_index(drop=True)
+
+    # Normalizuojam RD
+    lf_norm = df["Line-Function"].astype(str).str.strip().str.upper()
+
+    # Grupės prioritetai
+    PRIORITY = {"DOOR": 0, "SWING": 1, "OTHER": 2, "POWER": 3}
+
+    def s(x) -> str:
+        return "" if pd.isna(x) else str(x).strip()
+
+    def base(sym: str) -> str:
+        sym = s(sym)
+        if ":" in sym:
+            return sym.rsplit(":", 1)[0].strip()
+        return sym
+
+    def group_of_node(node: str) -> str:
+        """
+        node yra pilnas taškas su kontaktu (pvz. -S2115:.1).
+        Grupę nustatom pagal bazę (pvz. -S2115).
+        Neradus – OTHER.
+        """
+        b = base(node)
+        g = component_to_group.get(b)
+        if not g:
+            return "OTHER"
+
+        g = str(g).strip().upper()
+
+        # normalizuojam grupes iš ADV_WS_functions
+        if g.startswith("SWING"):
+            g = "SWING"
+        elif g.startswith("DOOR"):
+            g = "DOOR"
+        elif g.startswith("POWER"):
+            g = "POWER"
+        else:
+            g = "OTHER"
+
+        return g        
+
+
+    def is_simple_path(edges, nodes):
+        """
+        Patikrina:
+          - grafas vienas komponentas
+          - visi laipsniai <= 2
+          - yra tiksliai 0 arba 2 galai (deg==1)
+          - briaunų skaičius == mazgų skaičius - 1
+        """
+        if not nodes:
+            return False
+
+        adj = defaultdict(set)
+        deg = defaultdict(int)
+        for a, b in edges:
+            if a == b:
+                return False
+            adj[a].add(b)
+            adj[b].add(a)
+            deg[a] += 1
+            deg[b] += 1
+            if deg[a] > 2 or deg[b] > 2:
+                return False
+
+        # connectivity
+        start = next(iter(nodes))
+        seen = set()
+        q = deque([start])
+        while q:
+            u = q.popleft()
+            if u in seen:
+                continue
+            seen.add(u)
+            for v in adj[u]:
+                if v not in seen:
+                    q.append(v)
+
+        if seen != set(nodes):
+            return False
+
+        # ends
+        ends = [n for n in nodes if deg.get(n, 0) == 1]
+        if len(nodes) == 1:
+            return False
+        if len(ends) not in (0, 2):
+            return False
+
+        # edges count check for simple path (no cycles)
+        # If ends==0 -> cycle, skip (we don't want loops)
+        if len(ends) == 0:
+            return False
+
+        if len(edges) != len(nodes) - 1:
+            return False
+
+        return True
+
+    def extract_path_order(edges, nodes):
+        """
+        Kai grafas yra paprastas kelias, grąžina mazgų eilę nuo vieno galo iki kito.
+        """
+        adj = defaultdict(list)
+        deg = defaultdict(int)
+        for a, b in edges:
+            adj[a].append(b)
+            adj[b].append(a)
+            deg[a] += 1
+            deg[b] += 1
+
+        ends = [n for n in nodes if deg[n] == 1]
+        if len(ends) != 2:
+            return None
+
+        start = ends[0]
+        order = [start]
+        prev = None
+        cur = start
+        while True:
+            nxts = [x for x in adj[cur] if x != prev]
+            if not nxts:
+                break
+            nxt = nxts[0]
+            order.append(nxt)
+            prev, cur = cur, nxt
+
+        if len(order) != len(nodes):
+            return None
+        return order
+
+    def stable_reorder_nodes(path_nodes):
+        """
+        Perrikiuoja mazgus pagal DOOR→SWING→OTHER→POWER.
+        Išlaikom stabilumą grupės viduje (tokia tvarka, kokia jie buvo kelyje).
+        """
+        buckets = {k: [] for k in PRIORITY.keys()}
+        for n in path_nodes:
+            g = group_of_node(n)
+            if g not in buckets:
+                g = "OTHER"
+            buckets[g].append(n)
+
+        # suklijuojam pagal prioritetą
+        ordered = []
+        for g, _prio in sorted(PRIORITY.items(), key=lambda kv: kv[1]):
+            ordered.extend(buckets.get(g, []))
+        return ordered
+
+    def path_edges_from_nodes(node_order):
+        return list(zip(node_order, node_order[1:]))
+
+    # ---- apdorojam per Wireno ----
+    for wir, grp in df.groupby(df["Wireno"].astype(str), sort=False):
+        idxs = list(grp.index)
+
+        TARGET_LF = {"RD", "RD/WH", "DBU", "DBU/WH", "BK", "BU"}   # <-- čia gali pridėti daugiau
+
+        # Preserve the dedicated source -> K:~/- -> K:GND branches.
+        lf_idxs = [
+            i for i in idxs
+            if lf_norm.get(i, "") in TARGET_LF
+            and not str(df.at[i, "DaisyNo"] if "DaisyNo" in df.columns else "").startswith("K0VDC_")
+        ]
+        if len(lf_idxs) < 2:
+            continue
+
+        # Surenkam briaunas (RD eilutės) ir mazgus
+        edges = []
+        edge_row_idxs = []
+        nodes = set()
+
+        for i in lf_idxs:
+            a = s(df.at[i, "Name"])
+            b = s(df.at[i, "Name.1"])
+            if not a or not b or a.lower() == "nan" or b.lower() == "nan":
+                continue
+            edges.append((a, b))
+            edge_row_idxs.append(i)
+            nodes.add(a)
+            nodes.add(b)
+
+        # būtinas paprastas kelias
+        if not is_simple_path(edges, nodes):
+            continue
+
+        # Ištraukiam realią kelio mazgų tvarką
+        path_nodes = extract_path_order(edges, nodes)
+        if not path_nodes:
+            continue
+
+        # Perrikiuojam pagal grupes
+        new_nodes = stable_reorder_nodes(path_nodes)
+
+        # Jei niekas realiai nesikeičia – praleidžiam (idempotentiška)
+        if new_nodes == path_nodes:
+            continue
+
+        # Naujos briaunos
+        new_edges = path_edges_from_nodes(new_nodes)
+
+        # Saugiklis: briaunų kiekis turi sutapti su RD eilučių kiekiu (kelyje)
+        # Kadangi grafas buvo paprastas kelias, edges==len(nodes)-1; new_edges bus toks pats sk.
+        if len(new_edges) != len(edges):
+            continue
+
+        # Perrašom TIK Name/Name.1 toms pačioms RD eilutėms.
+        # Kad būtų deterministiška: RD eilutes išrikiuojam pagal jų vietą pradiniame kelyje.
+        # Sukuriam map: (u,v) in original path order -> row_idx
+        # Pirmiausia atstatom original path edges eilės tvarka, tada priskiriam eilutes.
+        orig_path_edges = path_edges_from_nodes(path_nodes)
+
+        # Surandam konkrečią eilutę kiekvienai original briaunai (neorientuotas match)
+        remaining_rows = set(edge_row_idxs)
+        edge_to_row = {}
+
+        def pick_row_for_edge(u, v):
+            # ieškom eilutės, kur {Name,Name.1} == {u,v}
+            for ridx in list(remaining_rows):
+                a = s(df.at[ridx, "Name"])
+                b = s(df.at[ridx, "Name.1"])
+                if {a, b} == {u, v}:
+                    remaining_rows.remove(ridx)
+                    return ridx
+            return None
+
+        ok = True
+        for (u, v) in orig_path_edges:
+            r = pick_row_for_edge(u, v)
+            if r is None:
+                ok = False
+                break
+            edge_to_row[(u, v)] = r
+        if not ok:
+            continue
+
+        # Dabar perrašom tas pačias eilutes naujomis briaunomis 1..N-1
+        # Eilutės parenkamos pagal original path briaunų eilę (stabilu).
+        for k, (u_old, v_old) in enumerate(orig_path_edges):
+            row_idx = edge_to_row[(u_old, v_old)]
+            u_new, v_new = new_edges[k]
+
+            # perrašom tik Name/Name.1
+            df.at[row_idx, "Name"] = u_new
+            df.at[row_idx, "Name.1"] = v_new
+
+    return df.reset_index(drop=True)
+
+def stage1_pipeline_29(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pipeline 29
+    Veikia tik jei projekte yra 230VL2 / 230VN2 grandinės.
+    Svarbiausias principas:
+    - kiekvienas Wireno tvarkomas atskirai
+    - Wireno tarpusavyje nemaišomi
+    Tvarkomi Wireno:
+    - F903/L
+    - F903/N
+    - 230VL2
+    - 230VN2
+    """
+
+    df = df.copy()
+    df_original = df_original.copy()
+    df_original = stage1_pipeline_3(df_original)
+
+    required_cols = {"Name", "Name.1", "Wireno"}
+    if not required_cols.issubset(df.columns) or not required_cols.issubset(df_original.columns):
+        return df.reset_index(drop=True)
+
+    # Trigger: tik jei yra VL2 / VN2
+    has_v2 = (
+        df["Wireno"].astype(str).isin(["230VL2", "230VN2"]).any()
+        or
+        df_original["Wireno"].astype(str).isin(["230VL2", "230VN2"]).any()
+    )
+    if not has_v2:
+        return df.reset_index(drop=True)
+
+    base_cols = list(df.columns)
+    for c in ["Name", "Name.1", "Wireno", "Line-Name", "Line-Function", "DaisyNo"]:
+        if c not in base_cols:
+            base_cols.append(c)
+
+    def blank_row():
+        return {c: "" for c in base_cols}
+
+    def add_row(rows_out, name, name1, wireno, line_name, line_function="", dno="0"):
+        r = blank_row()
+        r.update({
+            "Name": name,
+            "Name.1": name1,
+            "Wireno": wireno,
+            "Line-Name": line_name,
+            "Line-Function": line_function,
+            "DaisyNo": dno
+        })
+        rows_out.append(r)
+
+    def sym_base(sym: str) -> str:
+        s = "" if pd.isna(sym) else str(sym).strip()
+        return s.split(":", 1)[0] if ":" in s else s
+
+    def inherit_line_function(src: pd.DataFrame, symbol: str, default: str = "") -> str:
+        if not symbol:
+            return default
+        for _, r in src.iterrows():
+            if str(r.get("Name", "")).strip() == symbol or str(r.get("Name.1", "")).strip() == symbol:
+                lf = str(r.get("Line-Function", "")).strip()
+                if lf and lf.lower() != "nan":
+                    return lf
+        return default
+
+    def unique_symbols_from_src(src: pd.DataFrame) -> list:
+        symbols = []
+        seen = set()
+        for _, r in src.iterrows():
+            for c in ("Name", "Name.1"):
+                s = str(r.get(c, "")).strip()
+                if s and s.lower() != "nan" and s not in seen:
+                    seen.add(s)
+                    symbols.append(s)
+        return symbols
+
+    def is_fxx8_candidate(sym: str) -> bool:
+        """
+        Kandidatai:
+        -F118, -F128, -F138, -F148, -F158, -F218, -F318, -F328, -F338, -F348, -F358, ...
+        T.y. bazė turi atitikti:
+        -F1x8 / -F2x8 / -F3x8 / -F4x8
+        """
+        b = sym_base(sym)
+        return bool(re.match(r"^-F[1-4]\d8$", b))
+
+    def extract_f_number(sym: str):
+        b = sym_base(sym)
+        m = re.match(r"^-F(\d+)$", b)
+        return int(m.group(1)) if m else None
+
+    def choose_middle_fxx8(src: pd.DataFrame, required_suffix: str):
+        candidates = []
+        seen_bases = set()
+
+        for _, r in src.iterrows():
+            for c in ("Name", "Name.1"):
+                s = str(r.get(c, "")).strip()
+                if not s or s.lower() == "nan":
+                    continue
+                if not is_fxx8_candidate(s):
+                    continue
+                if not s.endswith(required_suffix):
+                    continue
+
+                b = sym_base(s)
+                if b in seen_bases:
+                    continue
+                seen_bases.add(b)
+
+                num = extract_f_number(s)
+                if num is not None:
+                    candidates.append((num, s))
+
+        if not candidates:
+            return None, []
+
+        candidates.sort(key=lambda x: x[0])
+        ordered = [s for _, s in candidates]
+        middle_idx = (len(ordered) - 1) // 2
+        return ordered[middle_idx], ordered
+
+    new_rows = []
+    replaced_wirenos = set()
+
+    # Išlaikom originalias F903 jungčių poras ir kontaktus.
+    # Komponentų žymėjimai priklauso nuo projekto.
+    for wireno_value, lf_default in [
+        ("F903/L", "BK"),
+        ("F903/N", "BU"),
+    ]:
+        src = df_original[df_original["Wireno"].str.strip() == wireno_value]
+        if src.empty:
+            continue
+
+        endpoints = src[["Name", "Name.1"]].apply(lambda column: column.str.strip())
+        missing_values = {"", "nan", "none", "<na>"}
+        if endpoints.apply(lambda column: column.str.lower().isin(missing_values)).any().any():
+            continue
+
+        for _, row in src.iterrows():
+            name = row["Name"].strip()
+            name1 = row["Name.1"].strip()
+            line_function = row.get("Line-Function", "").strip()
+            if line_function.lower() in missing_values:
+                line_function = lf_default
+            add_row(new_rows, name, name1, wireno_value, "1,5", line_function)
+
+        replaced_wirenos.add(wireno_value)
+
+    # ------------------------------------------------------------------
+    # 3) 230VL2 ir 230VN2 - kiekviena grandinė atskirai
+    # ------------------------------------------------------------------
+    for wireno_value, x_terminal, f104_sym, suffix, lf_default in [
+        ("230VL2", "-X0100:230VL2", "-F104:4", ":1", "BK"),
+        ("230VN2", "-X0100:230VN2", "-F104:6", ":N", "BU"),
+    ]:
+        src = df_original[df_original["Wireno"].astype(str).str.strip() == wireno_value].copy()
+        if src.empty:
+            continue
+
+        first_new_row = len(new_rows)
+        middle_f, all_f_candidates = choose_middle_fxx8(src, required_suffix=suffix)
+
+        # Vidurinis Fxx8 per F104 su Line-Name 2,5
+        if middle_f:
+            add_row(
+                new_rows,
+                x_terminal + "_MAIN",
+                f104_sym,
+                wireno_value,
+                "2,5",
+                lf_default,
+                "0"
+            )
+            add_row(
+                new_rows,
+                f104_sym,
+                middle_f,
+                wireno_value,
+                "2,5",
+                inherit_line_function(src, middle_f, lf_default),
+                "0"
+            )
+
+        symbols = unique_symbols_from_src(src)
+
+        excluded = {
+            sym_base(x_terminal),
+            sym_base(f104_sym),
+        }
+
+        # visi Fxx8 kandidatai išmetami iš "kitų" komponentų
+        for s in all_f_candidates:
+            excluded.add(sym_base(s))
+
+        seen_added = set()
+
+        # --------------------------------------------------------------
+        # Speciali taisyklė 230VN2 M9.. grandinėms:
+        # struktūra lieka kaip originale, bet:
+        #   Wireno = 230VN2
+        #   Line-Name = 1,5
+        # taikoma tik eilutėms, kur bent viena pusė yra -M9..
+        # --------------------------------------------------------------
+        if wireno_value == "230VN2":
+            motor_rows = []
+            used_motor_pairs = set()
+
+            for _, r in src.iterrows():
+                n1 = str(r.get("Name", "")).strip()
+                n2 = str(r.get("Name.1", "")).strip()
+
+                if not n1 or not n2 or n1.lower() == "nan" or n2.lower() == "nan":
+                    continue
+
+                b1 = sym_base(n1)
+                b2 = sym_base(n2)
+
+                # Tik eilutės su -M9.. paliekamos originalia struktūra
+                if b1.startswith("-M9") or b2.startswith("-M9"):
+                    pair_key = (n1, n2, wireno_value)
+                    if pair_key in used_motor_pairs:
+                        continue
+                    used_motor_pairs.add(pair_key)
+
+                    motor_rows.append((n1, n2))
+
+                    # Kad vėliau šitie simboliai nepatektų į X0100 -> komponentas generavimą
+                    if b1.startswith("-M9"):
+                        excluded.add(b1)
+                    if b2.startswith("-M9"):
+                        excluded.add(b2)
+
+            for n1, n2 in motor_rows:
+                add_row(
+                    new_rows,
+                    n1,
+                    n2,
+                    "230VN2",
+                    "1,5",
+                    inherit_line_function(src, n1, "BU"),
+                    "0"
+                )
+
+        # --------------------------------------------------------------
+        # Visi kiti likę šitos pačios grandinės komponentai:
+        # X0100 -> komponentas, Line-Name 1,5
+        # --------------------------------------------------------------
+        for s in symbols:
+            b = sym_base(s)
+            if b in excluded:
+                continue
+
+            pair = (x_terminal, s, wireno_value)
+            if pair in seen_added:
+                continue
+            seen_added.add(pair)
+
+            add_row(
+                new_rows,
+                x_terminal,
+                s,
+                wireno_value,
+                "1,5",
+                inherit_line_function(src, s, lf_default),
+                "0"
+            )   
+
+        if len(new_rows) > first_new_row:
+            replaced_wirenos.add(wireno_value)
+
+    # Keičiam tik tas grandines, kurioms sugeneravom pakaitines eilutes.
+    if new_rows:
+        keep = ~df["Wireno"].astype(str).str.strip().isin(replaced_wirenos)
+        df = pd.concat([df.loc[keep], pd.DataFrame(new_rows)], ignore_index=True)
+
+    # 5) Dedupe
+    if {"Name", "Name.1", "Wireno"}.issubset(df.columns):
+        df = df.drop_duplicates(subset=["Name", "Name.1", "Wireno"], keep="first")
+
+    # 6) Sort
+    sort_cols = [c for c in ["Wireno", "DaisyNo", "Line-Name"] if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(by=sort_cols, ascending=True).reset_index(drop=True)
+
+    if "DaisyNo" in df.columns:
+        df["DaisyNo"] = df["DaisyNo"].astype(str)
+
+    return df.reset_index(drop=True)
+
+def stage2_pipeline_1(uploaded_file) -> pd.DataFrame:
+    """
+    Stage-2 Pipeline 1 (KOMAX CSV) with conditional space removal:
+        - Only remove spaces in Pin / Pin.1 if Betriebsmittelkennzeichen or Betriebsmittelkennzeichen.1 starts with –K
+        - Otherwise, preserve internal spaces
+    """
+    # 1. Load CSV with auto-detected delimiter and encoding
+    uploaded_file.seek(0)
+    sample = uploaded_file.read(8192).decode("utf-8", errors="replace")
+    uploaded_file.seek(0)
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
+        sep = dialect.delimiter
+    except csv.Error:
+        sep = ","
+    df = None
+    for enc in ("utf-8", "latin1", "cp1252"):
+        uploaded_file.seek(0)
+        try:
+            df = pd.read_csv(
+                uploaded_file,
+                sep=sep,
+                engine="python",
+                dtype=str,
+                encoding=enc,
+                keep_default_na=False
+            )
+            break
+        except UnicodeDecodeError:
+            continue
+    if df is None:
+        raise ValueError("Unable to read CSV with utf-8 / latin1 / cp1252.")
+
+    # 2. Split on delimiter if only one wide column (common in Excel export)
+    if df.shape[1] == 1:
+        first = df.columns[0]
+        df = (
+            df[first]
+            .str.split(sep, expand=True)
+            .applymap(lambda x: x.strip() if isinstance(x, str) else x)
+        )
+
+    cols = df.columns.tolist()
+
+    # 3. Clean PINs (columns 3 and 10): if >1 colon, keep everything from second colon onward
+    def strip_until_second_colon(val: str):
+        if not isinstance(val, str): return val
+        parts = val.split(":")
+        return ":" + ":".join(parts[2:]) if len(parts) > 2 else val
+
+    for idx in (3, 10):
+        if idx < len(cols):
+            df[cols[idx]] = df[cols[idx]].apply(strip_until_second_colon)
+
+    # -------- CONDITIONAL SPACE REMOVAL ONLY ON -K ROWS ------
+    # Mask for rows with -K in Betriebsmittelkennzeichen or Betriebsmittelkennzeichen.1
+    name_col  = cols[2] if len(cols) > 2 else None    # Betriebsmittelkennzeichen
+    name1_col = cols[9] if len(cols) > 9 else None    # Betriebsmittelkennzeichen.1
+    pin_cols  = [cols[3] if len(cols) > 3 else None, cols[10] if len(cols) > 10 else None]
+    if name_col and name1_col:
+        mask_k = (
+            df[name_col].astype(str).str.startswith("-K", na=False)
+            | df[name1_col].astype(str).str.startswith("-K", na=False)
+        )
+        for pin_col in pin_cols:
+            if pin_col:
+                # Remove all spaces for those rows in Pin/Pin.1 only
+                df.loc[mask_k, pin_col] = df.loc[mask_k, pin_col].str.replace(" ", "", regex=False)
+    # Leave all other rows untouched (including cases with spaces in pin names)
+
+    # 4. Enforce minimum length in column 17 ('Länge in mm'): min 270
+    if 17 < len(cols):
+        col_r = cols[17]
+        def enforce_min(val):
+            try:
+                num = float(str(val).replace(",", "."))
+                return "270" if num < 270 else str(val)
+            except Exception:
+                return val
+        df[col_r] = df[col_r].apply(enforce_min)
+
+    # 5. Replace single space " " cells with empty string
+    df.replace(to_replace="^ $", value="", regex=True, inplace=True)
+
+    # 6. Drop duplicate rows based on columns C-D-J-K (indices 2-3-9-10)
+    indices_needed = [2, 3, 9, 10]
+    subset_cols = [cols[i] for i in indices_needed if i < len(cols)]
+    if subset_cols:
+        df = df.drop_duplicates(subset=subset_cols, keep="first").reset_index(drop=True)
+
+    return df
+
+
+def stage2_pipeline_2(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Stage 2 Pipeline 2 - Detect daisy chains and mark ferrule/common connections
+    
+    Analogous to stage1_pipeline_8 logic, but for KOMAX data:
+    - Columns C,D (indices 2,3) are like Name (Betriebsmittelkennzeichen + Pin)
+    - Columns J,K (indices 9,10) are like Name.1 (Betriebsmittelkennzeichen.1 + Pin.1)
+    - Column E (index 4) and Column L (index 11) need ferrule/common marking
+    
+    Logic:
+    - True endpoints get 'ferrule', middle connections get 'common'
+    - Special override: 'common' -> 'common_ferrule' for specific component types
+    """
+    
+    df = df.copy()
+    
+    # Get column names by index (more reliable than assuming names)
+    cols = df.columns.tolist()
+    if len(cols) < 12:
+        return df  # Not enough columns
+    
+    col_C = cols[2]   # Betriebsmittelkennzeichen (like Name)
+    col_D = cols[3]   # Pin (like Name suffix) 
+    col_J = cols[9]   # Betriebsmittelkennzeichen.1 (like Name.1)
+    col_K = cols[10]  # Pin.1 (like Name.1 suffix)
+    col_E = cols[6]   # Hülse (ferrule marking)
+    col_L = cols[13]  # Hülse.1 (ferrule marking)
+    
+    # Create composite identifiers like "symbol+pin"
+    df['Left_ID'] = df[col_C].astype(str) + df[col_D].astype(str)
+    df['Right_ID'] = df[col_J].astype(str) + df[col_K].astype(str)
+    
+    # Build connection map (similar to stage1_pipeline_8 logic)
+    value_to_rows = defaultdict(set)
+    
+    for idx, row in df.iterrows():
+        left_id = str(row['Left_ID']).strip()
+        right_id = str(row['Right_ID']).strip()
+        
+        if left_id and left_id != 'nan' and left_id != '':
+            value_to_rows[left_id].add(idx)
+        if right_id and right_id != 'nan' and right_id != '':
+            value_to_rows[right_id].add(idx)
+    
+    # Union-Find to group connected components
+    parent = {}
+    
+    def find(x):
+        if x not in parent:
+            parent[x] = x
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+    
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+    
+    # Initialize
+    for idx in df.index:
+        parent[idx] = idx
+    
+    # Group rows that share common identifiers
+    for value, row_indices in value_to_rows.items():
+        if len(row_indices) > 1:
+            row_list = list(row_indices)
+            for i in range(1, len(row_list)):
+                union(row_list[0], row_list[i])
+    
+    # Find groups
+    groups = defaultdict(list)
+    for idx in df.index:
+        root = find(idx)
+        groups[root].append(idx)
+    
+    # Mark ferrule/common for each group
+    for root, row_indices in groups.items():
+        if len(row_indices) > 1:  # Only process daisy chains (multiple connections)
+            # Sort by row index to maintain order
+            row_indices.sort()
+            
+            # Count how many times each component appears in the chain
+            component_count = defaultdict(int)
+            for idx in row_indices:
+                left_id = str(df.at[idx, 'Left_ID']).strip()
+                right_id = str(df.at[idx, 'Right_ID']).strip()
+                if left_id and left_id != 'nan':
+                    component_count[left_id] += 1
+                if right_id and right_id != 'nan':
+                    component_count[right_id] += 1
+            
+            # Identify true endpoints (appear only once)
+            endpoints = {comp for comp, count in component_count.items() if count == 1}
+            
+            # Mark each row based on whether its components are endpoints
+            for idx in row_indices:
+                left_id = str(df.at[idx, 'Left_ID']).strip()
+                right_id = str(df.at[idx, 'Right_ID']).strip()
+                
+                # Left side (column E)
+                if left_id in endpoints:
+                    df.at[idx, col_E] = 'Ferrule'
+                else:
+                    df.at[idx, col_E] = 'common'
+                
+                # Right side (column L)  
+                if right_id in endpoints:
+                    df.at[idx, col_L] = 'Ferrule'
+                else:
+                    df.at[idx, col_L] = 'common'
+    
+    # Helper function to check special component patterns
+    def should_be_common_ferrule(component_str):
+        """Check if component should be marked as common_ferrule"""
+        if not isinstance(component_str, str):
+            return False
+        
+        component_str = component_str.strip()
+        
+        # Check prefixes
+        if component_str.startswith(('-S', '-P', '-Q', '-X010')) and not component_str.startswith('-Q81'):
+            return True
+            
+        # Check exact matches
+        if component_str in ('-X923:N', '-X924:N', '-X927:N', '-X928:N'):
+            return True
+            
+        return False
+    
+    # Apply special override rules for common -> common_ferrule
+    for idx in df.index:
+        # Check column E (Left side - columns C+D)
+        if df.at[idx, col_E] == 'common':
+            left_component = str(df.at[idx, col_C]).strip()
+            if should_be_common_ferrule(left_component):
+                df.at[idx, col_E] = 'common_ferrule'
+        
+        # Check column L (Right side - columns J+K) 
+        if df.at[idx, col_L] == 'common':
+            right_component = str(df.at[idx, col_J]).strip()
+            if should_be_common_ferrule(right_component):
+                df.at[idx, col_L] = 'common_ferrule'
+    
+    # Clean up temporary columns
+    df = df.drop(['Left_ID', 'Right_ID'], axis=1)
+
+    # Force X912 sides to Ferrule
+    for idx, row in df.iterrows():
+        left_component = str(row[col_C]).strip()
+        right_component = str(row[col_J]).strip()
+
+        if left_component == '-X912':
+            df.at[idx, col_E] = 'Ferrule'
+
+        if right_component == '-X912':
+            df.at[idx, col_L] = 'Ferrule'
+    
+    return df
+
+
+def stage2_pipeline_4(df):
+    """
+    Stage 2 Pipeline 4 - Overwrite with 'Ferrule' based on specific conditions
+    
+    Logic:
+    1. When column C (Betriebsmittelkennzeichen) is in target_prefixes AND 
+       column D (Pin) is ':N' → overwrite column G (Hülse) with 'Ferrule'
+    2. When column J (Betriebsmittelkennzeichen.1) is in target_prefixes AND 
+       column K (Pin.1) is ':N' → overwrite column N (Hülse.1) with 'Ferrule'
+    
+    Target prefixes: [-M923, -M924, -M925, -X923, -X924, -X927, -X928]
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame (KOMAX format)
+        Expected column indices:
+        - Column C (index 2): Betriebsmittelkennzeichen
+        - Column D (index 3): Pin
+        - Column G (index 6): Hülse
+        - Column J (index 9): Betriebsmittelkennzeichen.1  
+        - Column K (index 10): Pin.1
+        - Column N (index 13): Hülse.1
+    
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with Ferrule values updated according to the rules
+    """
+    
+    df = df.copy()
+    
+    # Get column list
+    cols = df.columns.tolist()
+    
+    # Check if we have enough columns
+    if len(cols) < 14:
+        print(f"⚠️ Pipeline 4: Not enough columns (need at least 14, got {len(cols)})")
+        return df
+    
+    # Define column indices based on the KOMAX Excel structure
+    col_C_idx = 2   # Betriebsmittelkennzeichen
+    col_D_idx = 3   # Pin  
+    col_G_idx = 6   # Hülse (will be updated to 'Ferrule')
+    col_J_idx = 9   # Betriebsmittelkennzeichen.1
+    col_K_idx = 10  # Pin.1
+    col_N_idx = 13  # Hülse.1 (will be updated to 'Ferrule')
+    
+    # Get column names
+    col_C = cols[col_C_idx]
+    col_D = cols[col_D_idx] 
+    col_G = cols[col_G_idx]
+    col_J = cols[col_J_idx]
+    col_K = cols[col_K_idx]
+    col_N = cols[col_N_idx]
+    
+    # Target prefixes that trigger the transformation
+    target_prefixes = ['-M923', '-M924', '-M925', '-X923', '-X924', '-X927', '-X928', '-XPE']
+    
+    print(f"🔧 Pipeline 4: Processing {len(df)} rows for Ferrule updates")
+    
+    # Counters for reporting
+    updates_G = 0
+    updates_N = 0
+    
+    # Process each row
+    # define the suffixes you want to catch
+    suffixes = {':N', ':L3', ':PE'}
+    for idx, row in df.iterrows():
+        # Rule 1: Check column C and D for updating column G
+        col_C_val = str(row[col_C]).strip() if pd.notna(row[col_C]) else ''
+        col_D_val = str(row[col_D]).strip() if pd.notna(row[col_D]) else ''
+        
+        if col_C_val in target_prefixes and col_D_val in suffixes:
+            df.at[idx, col_G] = 'Ferrule'
+            updates_G += 1
+        
+        # Rule 2: Check column J and K for updating column N  
+        col_J_val = str(row[col_J]).strip() if pd.notna(row[col_J]) else ''
+        col_K_val = str(row[col_K]).strip() if pd.notna(row[col_K]) else ''
+        
+        if col_J_val in target_prefixes and col_K_val in suffixes:
+            df.at[idx, col_N] = 'Ferrule'
+            updates_N += 1
+    
+    # Report results
+    total_updates = updates_G + updates_N
+    if total_updates > 0:
+        print(f"✅ Pipeline 4: Updated {updates_G} G columns and {updates_N} N columns to 'Ferrule'")
+        print(f"📊 Pipeline 4: Total {total_updates} transformations applied")
+    else:
+        print("✅ Pipeline 4: No matching conditions found, no updates made")
+    
+    return df
+
+def stage2_pipeline_5(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    target_components = {"-X0100", "-X0101", "-X0102", "-XPE"}
+
+    letter_map = {
+        "-XPE": ["b", "c"],
+        "default": ["b", "c", "d", "e", "f", "g"],
+    }
+
+    counters = defaultdict(int)
+
+    def suffix_for(n: int, component: str) -> str:
+        letters = letter_map.get(component.upper(), letter_map["default"])
+        index = (n - 1) % len(letters)
+        quote_count = (n - 1) // len(letters)
+        return "_" + letters[index] + ("'" * quote_count)
+
+    def already_numbered(pin: str) -> bool:
+        return bool(re.search(r"_[bcdefg]'+?$|_[bcdefg]$", pin, re.IGNORECASE))
+
+    column_pairs = [
+        ("Betriebsmittelkennzeichen", "Pin"),
+        ("Betriebsmittelkennzeichen.1", "Pin.1"),
+    ]
+
+    for comp_col, pin_col in column_pairs:
+        if comp_col not in df.columns or pin_col not in df.columns:
+            continue
+
+        for idx in df.index:
+            comp = str(df.at[idx, comp_col]).strip().upper()
+            pin = str(df.at[idx, pin_col]).strip()
+
+            if comp not in target_components:
+                continue
+
+            if not pin or pin.lower() == "nan":
+                continue
+
+            if "MAIN" in pin.upper():
+                continue
+
+            if already_numbered(pin):
+                continue
+
+            group_key = (comp, pin.upper())
+            counters[group_key] += 1
+
+            df.at[idx, pin_col] = pin + suffix_for(counters[group_key], comp)
+
+    return df
+
+def stage2_final_text_to_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    if df.shape[1] == 1:
+        first_col = df.columns[0]
+
+        df = (
+            df[first_col]
+            .astype(str)
+            .str.split(",", expand=True)
+        )
+
+    df = df.fillna("").astype(str)
+
+    return df
+
+# ==========================================================
+# VALIDATION FUNCTIONS
+# ==========================================================
+
+def validate_distribution_terminals(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Patikrina pagrindines paskirstymo grandines.
+
+    Terminalų taisyklės:
+      F903/L3, F903/N, 230VL2, 230VN2 -> X0100
+      230VL, 230VN                    -> X0101
+      24VDC, 0VDC, 24VDC1/2/3        -> X0102
+
+    Spalvų taisyklės:
+      F903/L3 -> BK
+      F903/N  -> BU
+      230VL2  -> BK
+      230VN2  -> BU
+      230VL   -> RD
+      230VN   -> RD/WH
+      24VDC, 24VDC1/2/3 -> DBU
+      0VDC    -> DBU/WH
+
+    Funkcija failo nekeičia.
+    Ji tik grąžina rastų problemų lentelę.
+    """
+
+    error_columns = [
+        "Error type",
+        "Wireno",
+        "Expected",
+        "Found",
+        "Name",
+        "Name.1",
+        "Problem",
+    ]
+
+    required_columns = {
+        "Name",
+        "Name.1",
+        "Wireno",
+        "Line-Function",
+    }
+
+    if not required_columns.issubset(df.columns):
+        missing_columns = sorted(
+            required_columns - set(df.columns)
+        )
+
+        return pd.DataFrame(
+            [
+                {
+                    "Error type": "Missing column",
+                    "Wireno": "",
+                    "Expected": ", ".join(missing_columns),
+                    "Found": "",
+                    "Name": "",
+                    "Name.1": "",
+                    "Problem": (
+                        "Faile trūksta patikrai reikalingų stulpelių: "
+                        + ", ".join(missing_columns)
+                    ),
+                }
+            ],
+            columns=error_columns,
+        )
+
+    source = df.copy().fillna("")
+
+    for column in source.columns:
+        source[column] = (
+            source[column]
+            .astype(str)
+            .str.strip()
+        )
+
+    rules = {
+        "F903/L3": {
+            "terminal": "-X0100",
+            "color": "BK",
+        },
+        "F903/N": {
+            "terminal": "-X0100",
+            "color": "BU",
+        },
+        "230VL2": {
+            "terminal": "-X0100",
+            "color": "BK",
+        },
+        "230VN2": {
+            "terminal": "-X0100",
+            "color": "BU",
+        },
+        "230VL": {
+            "terminal": "-X0101",
+            "color": "RD",
+        },
+        "230VN": {
+            "terminal": "-X0101",
+            "color": "RD/WH",
+        },
+        "24VDC": {
+            "terminal": "-X0102",
+            "color": "DBU",
+        },
+        "0VDC": {
+            "terminal": "-X0102",
+            "color": "DBU/WH",
+        },
+        "24VDC1": {
+            "terminal": "-X0102",
+            "color": "DBU",
+        },
+        "24VDC2": {
+            "terminal": "-X0102",
+            "color": "DBU",
+        },
+        "24VDC3": {
+            "terminal": "-X0102",
+            "color": "DBU",
+        },
+    }
+
+    distribution_components = {
+        "-X0100",
+        "-X0101",
+        "-X0102",
+    }
+
+    color_replacements = {
+        "DBL": "DBU",
+        "DBLWH": "DBU/WH",
+        "DBUWH": "DBU/WH",
+        "RDWH": "RD/WH",
+        "LBL": "BU",
+    }
+
+    wireno_replacements = {
+        "24VDC.": "24VDC",
+        "24VDC1.": "24VDC1",
+        "24VDC2.": "24VDC2",
+        "24VDC3.": "24VDC3",
+        "0VDC.": "0VDC",
+    }
+
+    def clean(value):
+        value = str(value).strip()
+
+        if value.lower() in {
+            "",
+            "nan",
+            "none",
+            "null",
+        }:
+            return ""
+
+        return value
+
+    def designation(endpoint):
+        """
+        Pašalina vietos prefiksą.
+
+        Pvz.:
+        +L.1/-X0102:N -> -X0102:N
+        """
+        endpoint = clean(endpoint)
+
+        if "/" in endpoint:
+            endpoint = endpoint.rsplit("/", 1)[-1]
+
+        return endpoint
+
+    def component_name(endpoint):
+        endpoint = designation(endpoint)
+
+        if ":" in endpoint:
+            endpoint = endpoint.rsplit(":", 1)[0]
+
+        return endpoint.upper()
+
+    def normalize_wireno(value):
+        value = clean(value)
+        return wireno_replacements.get(value, value)
+
+    def normalize_color(value):
+        value = clean(value).upper()
+        return color_replacements.get(value, value)
+
+    errors = []
+
+    found_correct_terminal = {
+        wireno: False
+        for wireno in rules
+    }
+
+    wrong_terminal_wirenos = set()
+
+    for _, row in source.iterrows():
+        wireno = normalize_wireno(
+            row.get("Wireno", "")
+        )
+
+        if wireno not in rules:
+            continue
+
+        name = designation(
+            row.get("Name", "")
+        )
+
+        name_1 = designation(
+            row.get("Name.1", "")
+        )
+
+        expected_terminal = rules[wireno]["terminal"]
+        expected_color = rules[wireno]["color"]
+
+        found_color = normalize_color(
+            row.get("Line-Function", "")
+        ).upper()
+
+        # --------------------------------------------------
+        # SPALVOS PATIKRA
+        # --------------------------------------------------
+        # PE spalvų netikriname
+        if found_color not in ("GNYE", "PE"):
+        
+            if found_color != expected_color:
+                if found_color:
+                    problem = (
+                        f"{wireno} spalva yra {found_color}, "
+                        f"bet turi būti {expected_color}"
+                    )
+                else:
+                    problem = (
+                        f"{wireno} spalva nenurodyta, "
+                        f"bet turi būti {expected_color}"
+                    )
+        
+                errors.append({
+                    "Error type": "Wrong color",
+                    "Wireno": wireno,
+                    "Expected": expected_color,
+                    "Found": found_color,
+                    "Name": name,
+                    "Name.1": name_1,
+                    "Problem": problem,
+                })
+
+        # --------------------------------------------------
+        # TERMINALO PATIKRA
+        # --------------------------------------------------
+        row_distribution_terminals = []
+
+        for endpoint in (name, name_1):
+            endpoint_component = component_name(endpoint)
+
+            if endpoint_component in distribution_components:
+                row_distribution_terminals.append(endpoint)
+
+        # Eilutė tiesiogiai nesijungia prie X0100/X0101/X0102.
+        if not row_distribution_terminals:
+            continue
+
+        for terminal_endpoint in row_distribution_terminals:
+            found_terminal = component_name(
+                terminal_endpoint
+            )
+
+            if found_terminal == expected_terminal:
+                found_correct_terminal[wireno] = True
+                continue
+
+            wrong_terminal_wirenos.add(wireno)
+
+            errors.append({
+                "Error type": "Wrong terminal",
+                "Wireno": wireno,
+                "Expected": expected_terminal,
+                "Found": terminal_endpoint,
+                "Name": name,
+                "Name.1": name_1,
+                "Problem": (
+                    f"{wireno} priskirtas {found_terminal}, "
+                    f"bet turi būti {expected_terminal}"
+                ),
+            })
+
+    # ------------------------------------------------------
+    # GRANDINĖ YRA, BET TINKAMAS TERMINALAS NERASTAS
+    # ------------------------------------------------------
+    existing_wirenos = {
+        normalize_wireno(value)
+        for value in source["Wireno"]
+    }
+
+    for wireno, rule in rules.items():
+        if wireno not in existing_wirenos:
+            continue
+
+        if found_correct_terminal[wireno]:
+            continue
+
+        # Jei jau rasta konkreti blogo terminalo eilutė,
+        # bendro perspėjimo nebekuriame.
+        if wireno in wrong_terminal_wirenos:
+            continue
+
+        errors.append({
+            "Error type": "Terminal not found",
+            "Wireno": wireno,
+            "Expected": rule["terminal"],
+            "Found": "",
+            "Name": "",
+            "Name.1": "",
+            "Problem": (
+                f"{wireno} yra faile, bet nerasta jo jungtis "
+                f"prie {rule['terminal']}"
+            ),
+        })
+
+    result = pd.DataFrame(
+        errors,
+        columns=error_columns,
+    )
+
+    if not result.empty:
+        result = (
+            result
+            .drop_duplicates()
+            .sort_values(
+                by=[
+                    "Error type",
+                    "Wireno",
+                    "Name",
+                    "Name.1",
+                ],
+                ascending=True,
+            )
+            .reset_index(drop=True)
+        )
+
+    return result
+
+def validate_duplicate_endpoint_wirenos(df: pd.DataFrame,) -> pd.DataFrame:
+    """
+    Galutiniame faile suranda komponentų pajungimo taškus,
+    naudojamus su daugiau nei vienu skirtingu Wireno.
+
+    Ignoruojama:
+    - Line-Function = GNYE;
+    - Line-Function = PE;
+    - Wireno = PE;
+    - visos jungtys į -XPE;
+    - tiksliai -X912;
+    - visi -X92... komponentai, pvz. -X921, -X923, -X928.
+
+    Svarbu:
+    - kontaktų tarpai NEŠALINAMI;
+    - -T901:0 V ir -T901:0V laikomi skirtingais kontaktais;
+    - puslapiniai Wireno, pvz. 90:03 ar 92:01, nėra ignoruojami.
+
+    Funkcija nieko nekeičia.
+    Ji tik grąžina rastų problemų lentelę.
+    """
+
+    result_columns = [
+        "Endpoint",
+        "Wirenos",
+        "Count",
+        "Example connections",
+        "Problem",
+    ]
+
+    required_columns = {
+        "Name",
+        "Name.1",
+        "Wireno",
+    }
+
+    if not required_columns.issubset(df.columns):
+        return pd.DataFrame(columns=result_columns)
+
+    source = df.copy().fillna("")
+
+    def clean(value):
+        value = str(value).strip()
+
+        if value.lower() in {
+            "",
+            "nan",
+            "none",
+            "null",
+        }:
+            return ""
+
+        return value
+
+    def designation(endpoint):
+        """
+        Pašalina vietos prefiksą, bet nekeičia kontakto vidaus.
+
+        Pvz.:
+        +L.1/-K1011:14 -> -K1011:14
+        """
+        endpoint = clean(endpoint)
+
+        if "/" in endpoint:
+            endpoint = endpoint.rsplit("/", 1)[-1]
+
+        return endpoint
+
+    def normalize_endpoint(endpoint):
+        """
+        Normalizuoja tik registrą ir kraštinius tarpus.
+
+        Vidaus tarpai paliekami:
+        -T901:0 V != -T901:0V
+        """
+        return designation(endpoint).upper()
+
+    def component_name(endpoint):
+        """
+        Iš kontakto grąžina komponento pavadinimą.
+
+        Pvz.:
+        -K1011:14 -> -K1011
+        -X923:L3  -> -X923
+        """
+        endpoint = normalize_endpoint(endpoint)
+
+        if ":" in endpoint:
+            return endpoint.rsplit(":", 1)[0]
+
+        return endpoint
+
+    def normalize_wireno(value):
+        value = clean(value)
+
+        replacements = {
+            "24VDC.": "24VDC",
+            "24VDC1.": "24VDC1",
+            "24VDC2.": "24VDC2",
+            "24VDC3.": "24VDC3",
+            "0VDC.": "0VDC",
+        }
+
+        return replacements.get(value, value)
+
+    def normalize_line_function(value):
+        value = clean(value).upper()
+
+        replacements = {
+            "DBL": "DBU",
+            "DBLWH": "DBU/WH",
+            "DBUWH": "DBU/WH",
+            "RDWH": "RD/WH",
+            "LBL": "BU",
+        }
+
+        return replacements.get(value, value)
+
+    def is_ignored_component(endpoint):
+        """
+        Ignoruojami terminalai, kuriuose teisėtai gali būti
+        keli skirtingi Wireno:
+        - tiksliai -X912;
+        - visi -X92... komponentai.
+        """
+        component = component_name(endpoint)
+
+        if component == "-X912":
+            return True
+
+        return bool(
+            re.fullmatch(
+                r"-X92\d+",
+                component,
+            )
+        )
+
+    endpoint_data = {}
+
+    for _, row in source.iterrows():
+        wireno = normalize_wireno(
+            row.get("Wireno", "")
+        )
+
+        line_function = normalize_line_function(
+            row.get("Line-Function", "")
+        )
+
+        name = designation(
+            row.get("Name", "")
+        )
+
+        name_1 = designation(
+            row.get("Name.1", "")
+        )
+
+        if not wireno:
+            continue
+
+        if wireno.upper() == "PE":
+            continue
+
+        if line_function in {
+            "GNYE",
+            "PE",
+        }:
+            continue
+
+        if (
+            component_name(name) == "-XPE"
+            or component_name(name_1) == "-XPE"
+        ):
+            continue
+
+        for endpoint in (name, name_1):
+            normalized = normalize_endpoint(endpoint)
+
+            if not normalized:
+                continue
+
+            if component_name(normalized) == "-XPE":
+                continue
+
+            if is_ignored_component(normalized):
+                continue
+
+            if normalized not in endpoint_data:
+                endpoint_data[normalized] = {
+                    "display": designation(endpoint),
+                    "wirenos": set(),
+                    "connections": [],
+                }
+
+            endpoint_data[normalized]["wirenos"].add(
+                wireno
+            )
+
+            endpoint_data[normalized]["connections"].append(
+                f"{name} ↔ {name_1} [{wireno}]"
+            )
+
+    problems = []
+
+    for data in endpoint_data.values():
+        wirenos = sorted(data["wirenos"])
+
+        if len(wirenos) <= 1:
+            continue
+
+        examples = list(
+            dict.fromkeys(data["connections"])
+        )[:5]
+
+        problems.append({
+            "Endpoint": data["display"],
+            "Wirenos": ", ".join(wirenos),
+            "Count": len(wirenos),
+            "Example connections": " | ".join(examples),
+            "Problem": (
+                f"{data['display']} naudojamas su keliais "
+                f"skirtingais Wireno: {', '.join(wirenos)}"
+            ),
+        })
+
+    result = pd.DataFrame(
+        problems,
+        columns=result_columns,
+    )
+
+    if not result.empty:
+        result = (
+            result
+            .sort_values(
+                by=[
+                    "Count",
+                    "Endpoint",
+                ],
+                ascending=[
+                    False,
+                    True,
+                ],
+            )
+            .reset_index(drop=True)
+        )
+
+    return result
+    
+def validate_multiple_connection_points(    df: pd.DataFrame,) -> pd.DataFrame:
+    """
+    Tikrina numeruotų laidų pajungimo taškus.
+
+    Klaida rodoma, kai:
+    - Wireno yra numeruotas laidas, pvz. 141:15, 90:03, 431:06;
+    - tas pats Endpoint tame pačiame Wireno panaudotas daugiau nei 2 kartus.
+
+    Funkcija nieko nekeičia.
+    Grąžina tik probleminių Wireno sąrašą.
+    """
+
+    if not {
+        "Name",
+        "Name.1",
+        "Wireno",
+    }.issubset(df.columns):
+        return pd.DataFrame(
+            columns=["Wireno"]
+        )
+
+    source = df.copy().fillna("")
+
+    def clean(value):
+        value = str(value).strip()
+
+        if value.lower() in {
+            "",
+            "nan",
+            "none",
+            "null",
+        }:
+            return ""
+
+        return value
+
+    def is_numbered_wireno(value):
+        value = clean(value)
+
+        return bool(
+            re.fullmatch(
+                r"\d+:\d+",
+                value,
+            )
+        )
+
+    endpoint_data = {}
+
+    for _, row in source.iterrows():
+
+        wireno = clean(
+            row.get("Wireno", "")
+        )
+
+        # Tikrinami tik numeruoti laidai
+        if not is_numbered_wireno(wireno):
+            continue
+
+        # Ignoruoti visus 9x:xx
+        if re.fullmatch(r"9\d:\d+", wireno):
+            continue
+
+        # Ignoruoti 631:01
+        if wireno == "631:01":
+            continue
+        
+        name = clean(
+            row.get("Name", "")
+        )
+
+        name_1 = clean(
+            row.get("Name.1", "")
+        )
+
+        if not name or not name_1:
+            continue
+
+        for endpoint in (name, name_1):
+
+            key = (
+                wireno,
+                endpoint,
+            )
+
+            if key not in endpoint_data:
+                endpoint_data[key] = 0
+
+            endpoint_data[key] += 1
+
+    problem_wirenos = set()
+
+    for (
+        wireno,
+        endpoint,
+    ), count in endpoint_data.items():
+
+        if count > 2:
+            problem_wirenos.add(
+                wireno
+            )
+
+    result = pd.DataFrame(
+        sorted(problem_wirenos),
+        columns=["Wireno"],
+    )
+
+    return result.reset_index(drop=True)
+
+def restore_fan_connections(df: pd.DataFrame, df_original: pd.DataFrame) -> pd.DataFrame:
+    """Restore fan L/N/PE from unambiguous direct RAW connections.
+
+    A missing, conflicting, or indirect connection raises ValueError; never
+    invent a terminal. Non-fan rows remain untouched.
+    """
+    cols = {"Name", "Name.1"}
+    if not cols.issubset(df.columns) or not cols.issubset(df_original.columns):
+        raise ValueError("Ventiliatoriai: truksta Name arba Name.1 stulpelio")
+    raw = df_original.fillna("").copy()
+    fans = {}
+    fan_re = re.compile(r"^(-M92\d+):(L|N|PE|⏚)$", re.I)
+    terminal_re = re.compile(r"^(-X92\d+):([^:]+)$", re.I)
+    for _, row in raw.iterrows():
+        for side, other in (("Name", "Name.1"), ("Name.1", "Name")):
+            endpoint = str(row[side]).strip()
+            match = fan_re.fullmatch(endpoint)
+            if not match:
+                continue
+            fan, pin = match.group(1).upper(), match.group(2).upper()
+            pin = "PE" if pin == "⏚" else pin
+            fans.setdefault(fan, {}).setdefault(pin, []).append((endpoint, str(row[other]).strip(), row))
+    planned = []
+    problems = []
+    for fan, pins in sorted(fans.items()):
+        selected = {}
+        for pin in ("L", "N"):
+            candidates = [(end, dest, row) for end, dest, row in pins.get(pin, []) if terminal_re.fullmatch(dest)]
+            unique = {(end.upper(), dest.upper()) for end, dest, _ in candidates}
+            if len(unique) != 1:
+                problems.append(f"{fan}: {pin} terminalas nenustatytas vienareiksmiskai")
+                continue
+            selected[pin] = candidates[0]
+        pe = [(end, dest, row) for end, dest, row in pins.get("PE", []) if dest.strip()]
+        if len({(end.upper(), dest.upper()) for end, dest, _ in pe}) != 1:
+            problems.append(f"{fan}: PE jungtis originale nenustatyta vienareiksmiskai")
+        if len(selected) != 2 or not pe:
+            continue
+        lterm = terminal_re.fullmatch(selected["L"][1]).group(1).upper()
+        nterm = terminal_re.fullmatch(selected["N"][1]).group(1).upper()
+        if lterm != nterm:
+            problems.append(f"{fan}: L ({lterm}) ir N ({nterm}) terminalai skiriasi")
+            continue
+        for pin in ("L", "N", "PE"):
+            end, dest, row = pe[0] if pin == "PE" else selected[pin]
+            record = {col: "" for col in df.columns}
+            for col in record:
+                if col in row.index:
+                    record[col] = row[col]
+            record.update({"Name": end, "Name.1": f"{lterm}:PE" if pin == "PE" else dest,
+                           "Line-Function": {"L": "BK", "N": "BU", "PE": "GNYE"}[pin],
+                           "DaisyNo": "VENTS"})
+            if not str(record.get("Line-Name", "")).strip():
+                record["Line-Name"] = "1,5"
+            if pin == "PE": record["Wireno"] = "PE"
+            planned.append(record)
+    if problems:
+        raise ValueError("Ventiliatoriu jungciu klaidos: " + "; ".join(problems))
+    if not fans:
+        return df.copy().reset_index(drop=True)
+    def is_fan_endpoint(value):
+        return bool(fan_re.fullmatch(str(value).strip()))
+    remove = df["Name"].map(is_fan_endpoint) | df["Name.1"].map(is_fan_endpoint)
+    result = df.loc[~remove].copy()
+    return pd.concat([result, pd.DataFrame(planned, columns=df.columns)], ignore_index=True)
