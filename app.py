@@ -54,7 +54,7 @@ def t901_wire_suggestion(source):
                 "Name": "-T901:0V**",
                 "Name.1": "-T901:115V*",
                 "Wireno": "90:10",
-                "Line-Name": "0,75",
+                "Line-Name": "1,5",
                 "Line-Function": "RD",
             }
     return None
